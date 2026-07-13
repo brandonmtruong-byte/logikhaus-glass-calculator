@@ -197,7 +197,9 @@ try:
     st.markdown(f'<div class="status-box">✓ Glass database loaded — {len(glass_lookup)} codes</div>',
                 unsafe_allow_html=True)
 except Exception as e:
-    st.error(f'Could not connect to Google Sheets: {e}')
+    st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
+    import traceback
+    st.code(traceback.format_exc())
     st.stop()
 
 # ── File upload ────────────────────────────────────────────────────────────
