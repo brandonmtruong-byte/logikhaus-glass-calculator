@@ -65,7 +65,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────
-SHEET_ID      = '1aWi5hPDJWNHOwcW-c_SleIJk5aoBy7ZtB8CBM1jmfRc'
+SHEET_ID = '1GLWQq3ruw1IARJ1jIQs4Be_KPNk1LXSx-1IAIZCfpY0'
 GLASS_DENSITY = 2.5   # kg per m² per mm
 
 # ── Google Sheets connection ────────────────────────────────────────────────
@@ -78,7 +78,7 @@ def load_glass_lookup():
     ]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     gc = gspread.authorize(creds)
-    ws = gc.open_by_key(SHEET_ID).get_worksheet_by_id(0)
+    ws = gc.open_by_key(SHEET_ID).get_worksheet_by_id(1019075390)
     rows = ws.get_all_values()
     lookup = {}
     for row in rows[5:]:
