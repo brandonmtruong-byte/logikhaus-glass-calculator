@@ -102,9 +102,9 @@ def process_pdf(file_bytes, glass_lookup):
         with open(logo_path, "rb") as f:
             logo_bytes = f.read()
 
-    for page in doc:
-        # Stamp logo top-left on every page if logo is available
-        if logo_bytes:
+    for page_num, page in enumerate(doc):
+        # Stamp logo on first page only
+        if logo_bytes and page_num == 0:
             logo_rect = fitz.Rect(20, 25, 138, 118)
             page.insert_image(logo_rect, stream=logo_bytes)
 
@@ -134,7 +134,8 @@ def process_pdf(file_bytes, glass_lookup):
 
                 # Glass line
                 if full_text.startswith('Glass:') or full_text.startswith('glass:'):
-                    lhg_match = re.search(r'(LHG\d+)', full_text)
+                    lhg_matches = re.findall(r'(LHG\d+)', full_text)
+                    lhg_match = type('obj', (object,), {'group': lambda self, x: lhg_matches[0]})() if len(lhg_matches) == 1 else None
                     last      = spans[-1]
                     bbox      = last['bbox']
                     glass_lines.append({
