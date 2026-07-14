@@ -105,7 +105,7 @@ def process_pdf(file_bytes, glass_lookup):
     for page in doc:
         # Stamp logo top-left on every page if logo is available
         if logo_bytes:
-            logo_rect = fitz.Rect(20, 15, 220, 85)
+            logo_rect = fitz.Rect(0, 0, 150, 70)
             page.insert_image(logo_rect, stream=logo_bytes)
 
         blocks       = page.get_text('dict')['blocks']
