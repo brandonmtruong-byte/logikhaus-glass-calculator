@@ -55,7 +55,7 @@ st.markdown("""
 # ── Header ─────────────────────────────────────────────────────────────────
 col_logo, col_title = st.columns([1, 3])
 with col_logo:
-    st.image("Logikhaus_logo.jpg", width=150)
+    st.image("Logikhaus_logo.jpg", use_container_width=True)
 with col_title:
     st.markdown("""
     <div style="padding-top: 1rem;">
