@@ -4,8 +4,7 @@ import re
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
-import io
-import json
+import os
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -54,18 +53,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Header ─────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="lh-header">
-    <div class="lh-logo">LH</div>
-    <div>
+col_logo, col_title = st.columns([1, 3])
+with col_logo:
+    st.image("Logikhaus_logo.jpg", width=150)
+with col_title:
+    st.markdown("""
+    <div style="padding-top: 1rem;">
         <div class="lh-title">Glass Weight Calculator</div>
         <div class="lh-sub">Logikhaus Pty Ltd — internal tool</div>
     </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+st.markdown('<hr style="border: 2px solid #8B1A1A; margin-bottom: 2rem;">', unsafe_allow_html=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────
-SHEET_ID = '1GLWQq3ruw1IARJ1jIQs4Be_KPNk1LXSx-1IAIZCfpY0'
+SHEET_ID      = '1GLWQq3ruw1IARJ1jIQs4Be_KPNk1LXSx-1IAIZCfpY0'
 GLASS_DENSITY = 2.5   # kg per m² per mm
 
 # ── Google Sheets connection ────────────────────────────────────────────────
@@ -91,11 +92,23 @@ def load_glass_lookup():
 
 # ── PDF processing ─────────────────────────────────────────────────────────
 def process_pdf(file_bytes, glass_lookup):
-    doc      = fitz.open(stream=file_bytes, filetype="pdf")
-    results  = []
+    doc     = fitz.open(stream=file_bytes, filetype="pdf")
+    results = []
+
+    # Load logo once if it exists
+    logo_bytes = None
+    logo_path  = os.path.join(os.path.dirname(__file__), "Logikhaus_logo.jpg")
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            logo_bytes = f.read()
 
     for page in doc:
-        blocks      = page.get_text('dict')['blocks']
+        # Stamp logo top-left on every page if logo is available
+        if logo_bytes:
+            logo_rect = fitz.Rect(30, 20, 180, 90)
+            page.insert_image(logo_rect, stream=logo_bytes)
+
+        blocks       = page.get_text('dict')['blocks']
         size_entries = []
         glass_lines  = []
 
@@ -124,7 +137,6 @@ def process_pdf(file_bytes, glass_lookup):
                     lhg_match = re.search(r'(LHG\d+)', full_text)
                     last      = spans[-1]
                     bbox      = last['bbox']
-                    c         = last['color']
                     glass_lines.append({
                         'y_mid':     (bbox[1] + bbox[3]) / 2,
                         'y_base':    bbox[1] + last['size'] * 0.85,
@@ -213,8 +225,8 @@ uploaded = st.file_uploader(
 if uploaded:
     st.markdown("---")
     with st.spinner('Processing PDF...'):
-        file_bytes             = uploaded.read()
-        annotated_bytes, rows  = process_pdf(file_bytes, glass_lookup)
+        file_bytes            = uploaded.read()
+        annotated_bytes, rows = process_pdf(file_bytes, glass_lookup)
 
     # ── Summary table ──────────────────────────────────────────────────────
     st.markdown("### Results")
