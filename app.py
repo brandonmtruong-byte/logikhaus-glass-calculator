@@ -132,17 +132,17 @@ def process_pdf(file_bytes, glass_lookup):
                         y, w, h, _ = size_entries[-1]
                         size_entries[-1] = (y, w, h, True)
 
-                # Glass line
+                # Glass line — only use code if exactly one LHG code present
                 if full_text.startswith('Glass:') or full_text.startswith('glass:'):
-                    lhg_matches = re.findall(r'(LHG\d+)', full_text)
-                    lhg_match = type('obj', (object,), {'group': lambda self, x: lhg_matches[0]})() if len(lhg_matches) == 1 else None
-                    last      = spans[-1]
-                    bbox      = last['bbox']
+                    lhg_matches    = re.findall(r'LHG\d+', full_text)
+                    lhg_code_found = lhg_matches[0] if len(lhg_matches) == 1 else None
+                    last           = spans[-1]
+                    bbox           = last['bbox']
                     glass_lines.append({
                         'y_mid':     (bbox[1] + bbox[3]) / 2,
                         'y_base':    bbox[1] + last['size'] * 0.85,
                         'font_size': last['size'],
-                        'lhg_code':  lhg_match.group(1) if lhg_match else None,
+                        'lhg_code':  lhg_code_found,
                     })
 
         page_width = page.rect.width
@@ -169,6 +169,7 @@ def process_pdf(file_bytes, glass_lookup):
             lhg_code = gl['lhg_code']
 
             if lhg_code and lhg_code in glass_lookup:
+                # Clean single match — annotate PDF and record result
                 thickness = glass_lookup[lhg_code]
                 weight    = area * thickness * GLASS_DENSITY
                 label     = f'[{weight:.1f} kg]'
@@ -180,24 +181,23 @@ def process_pdf(file_bytes, glass_lookup):
                     'Weight':    f'{weight:.1f} kg',
                     '_skip':     False,
                 })
+                page.insert_text(
+                    (page_width - 90, gl['y_base']),
+                    label,
+                    fontsize=gl['font_size'],
+                    fontname='helv',
+                    color=(0.0, 0.0, 0.0),
+                )
             else:
-                label = f'[{area:.3f} m2]'
+                # Multiple codes or unrecognised — no annotation on PDF
                 results.append({
                     'Size':      f'{w} × {h} mm',
-                    'LHG Code':  lhg_code or 'Not found',
+                    'LHG Code':  lhg_code or 'Multiple codes — skipped',
                     'Thickness': '—',
                     'Area (m²)': f'{area:.3f}',
-                    'Weight':    'No LHG match',
+                    'Weight':    'No LHG match' if lhg_code else 'Multiple codes — skipped',
                     '_skip':     False,
                 })
-
-            page.insert_text(
-                (page_width - 90, gl['y_base']),
-                label,
-                fontsize=gl['font_size'],
-                fontname='helv',
-                color=(0.0, 0.0, 0.0),
-            )
 
     out_bytes = doc.tobytes()
     doc.close()
@@ -237,7 +237,7 @@ if uploaded:
         original = rows[row.name]
         if original.get('_skip'):
             return ['color: #bbb'] * len(row)
-        if 'No LHG' in str(row.get('Weight', '')):
+        if 'No LHG' in str(row.get('Weight', '')) or 'skipped' in str(row.get('Weight', '')):
             return ['color: #c0392b'] * len(row)
         return [''] * len(row)
 
