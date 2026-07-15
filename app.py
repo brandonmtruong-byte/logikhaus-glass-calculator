@@ -69,6 +69,9 @@ st.markdown('<hr style="border: 2px solid #8B1A1A; margin-bottom: 2rem;">', unsa
 SHEET_ID      = '1GLWQq3ruw1IARJ1jIQs4Be_KPNk1LXSx-1IAIZCfpY0'
 GLASS_DENSITY = 2.5   # kg per m² per mm
 
+LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND page for Schedule.pdf")
+LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
+
 # ── Google Sheets connection ────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_glass_lookup():
@@ -89,6 +92,30 @@ def load_glass_lookup():
             if thickness:
                 lookup[code] = float(thickness)
     return lookup
+
+# ── Legend page helpers ─────────────────────────────────────────────────────
+def has_legend_page(doc):
+    """Return True if any page in doc already contains the legend text."""
+    for page in doc:
+        text = page.get_text()
+        if all(kw in text for kw in LEGEND_KEYWORDS):
+            return True
+    return False
+
+def append_legend_page(doc):
+    """
+    Append the legend PDF to the end of doc, unless a legend page is
+    already present. Returns a status string for UI feedback:
+    'added', 'already_present', or 'missing_file'.
+    """
+    if has_legend_page(doc):
+        return 'already_present'
+    if not os.path.exists(LEGEND_PDF_PATH):
+        return 'missing_file'
+    legend_doc = fitz.open(LEGEND_PDF_PATH)
+    doc.insert_pdf(legend_doc)
+    legend_doc.close()
+    return 'added'
 
 # ── PDF processing ─────────────────────────────────────────────────────────
 def process_pdf(file_bytes, glass_lookup):
@@ -199,9 +226,12 @@ def process_pdf(file_bytes, glass_lookup):
                     '_skip':     False,
                 })
 
+    # ── Append legend page (if not already present) ────────────────────────
+    legend_status = append_legend_page(doc)
+
     out_bytes = doc.tobytes()
     doc.close()
-    return out_bytes, results
+    return out_bytes, results, legend_status
 
 # ── Load glass lookup ──────────────────────────────────────────────────────
 try:
@@ -226,8 +256,18 @@ uploaded = st.file_uploader(
 if uploaded:
     st.markdown("---")
     with st.spinner('Processing PDF...'):
-        file_bytes            = uploaded.read()
-        annotated_bytes, rows = process_pdf(file_bytes, glass_lookup)
+        file_bytes = uploaded.read()
+        annotated_bytes, rows, legend_status = process_pdf(file_bytes, glass_lookup)
+
+    # ── Legend status feedback ──────────────────────────────────────────────
+    if legend_status == 'added':
+        st.markdown('<div class="status-box">✓ Legend page appended to end of quote</div>',
+                     unsafe_allow_html=True)
+    elif legend_status == 'already_present':
+        st.markdown('<div class="status-box">Legend page already present — not duplicated</div>',
+                     unsafe_allow_html=True)
+    elif legend_status == 'missing_file':
+        st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder — legend page was not added.')
 
     # ── Summary table ──────────────────────────────────────────────────────
     st.markdown("### Results")
