@@ -69,12 +69,37 @@ st.markdown('<hr style="border: 2px solid #8B1A1A; margin-bottom: 2rem;">', unsa
 SHEET_ID      = '1GLWQq3ruw1IARJ1jIQs4Be_KPNk1LXSx-1IAIZCfpY0'
 GLASS_DENSITY = 2.5   # kg per m² per mm
 
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logikhaus_logo.jpg")
+LOGO_RECT = fitz.Rect(20, 25, 138, 118)   # position of the stamped logo on page 1
+
 LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND page for Schedule.pdf")
 LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 
-# ── Google Sheets connection ────────────────────────────────────────────────
+
+# ═════════════════════════════════════════════════════════════════════════
+#  MODULE 1 — LOGO STAMPER
+#  Stamps the Logikhaus logo onto the first page of the PDF.
+# ═════════════════════════════════════════════════════════════════════════
+
+def stamp_logo(page):
+    """Insert the Logikhaus logo image onto the given page, if the logo file exists."""
+    if not os.path.exists(LOGO_PATH):
+        return
+    with open(LOGO_PATH, "rb") as f:
+        logo_bytes = f.read()
+    page.insert_image(LOGO_RECT, stream=logo_bytes)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  MODULE 2 — GLASS MASS (WEIGHT) CALCULATOR
+#  Reads glass sizes + LHG codes off a page, looks up thickness, computes
+#  weight, writes the weight label back onto the PDF, and returns row data
+#  for the on-screen results table.
+# ═════════════════════════════════════════════════════════════════════════
+
 @st.cache_data(ttl=300)
 def load_glass_lookup():
+    """Pull LHG code -> thickness(mm) lookup table from the Google Sheet."""
     creds_dict = dict(st.secrets["gcp_service_account"])
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -93,7 +118,139 @@ def load_glass_lookup():
                 lookup[code] = float(thickness)
     return lookup
 
-# ── Legend page helpers ─────────────────────────────────────────────────────
+
+def extract_size_and_glass_lines(page):
+    """
+    Scan a page's text blocks and pull out:
+      - size_entries: list of (y_mid, width_mm, height_mm, is_irregular)
+      - glass_lines:  list of dicts with position/font info + LHG code (if any)
+    """
+    blocks       = page.get_text('dict')['blocks']
+    size_entries = []
+    glass_lines  = []
+
+    for b in blocks:
+        if 'lines' not in b:
+            continue
+        for line in b['lines']:
+            spans     = line['spans']
+            full_text = ''.join(s['text'] for s in spans).strip()
+
+            # Size line, e.g. "size (W x H): 1200 x 800"
+            m = re.search(r'size \(W x H\):\s*(\d+)\s*x\s*(\d+)', full_text)
+            if m:
+                w, h  = int(m.group(1)), int(m.group(2))
+                y_mid = (spans[0]['bbox'][1] + spans[0]['bbox'][3]) / 2
+                size_entries.append((y_mid, w, h, False))
+
+            # Irregular shape markers — flag the size entry just recorded
+            if re.search(r'ANGLE EXTRA|ARCH EXTRA', full_text, re.IGNORECASE):
+                if size_entries:
+                    y, w, h, _ = size_entries[-1]
+                    size_entries[-1] = (y, w, h, True)
+
+            # Glass line — only use code if exactly one LHG code present
+            if full_text.startswith('Glass:') or full_text.startswith('glass:'):
+                lhg_matches    = re.findall(r'LHG\d+', full_text)
+                lhg_code_found = lhg_matches[0] if len(lhg_matches) == 1 else None
+                last           = spans[-1]
+                bbox           = last['bbox']
+                glass_lines.append({
+                    'y_mid':     (bbox[1] + bbox[3]) / 2,
+                    'y_base':    bbox[1] + last['size'] * 0.85,
+                    'font_size': last['size'],
+                    'lhg_code':  lhg_code_found,
+                })
+
+    return size_entries, glass_lines
+
+
+def match_glass_to_size(glass_line, size_entries):
+    """Find the size entry directly above a given glass line (closest y_mid above it)."""
+    above = [(abs(glass_line['y_mid'] - s[0]), s)
+             for s in size_entries if s[0] < glass_line['y_mid']]
+    if not above:
+        return None
+    _, size_entry = min(above, key=lambda x: x[0])
+    return size_entry
+
+
+def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
+    """
+    Given one glass line matched to one size entry, compute weight (if possible),
+    stamp the weight label onto the page, and return a result row (dict) for the table.
+    """
+    _, w, h, irregular = size_entry
+
+    if irregular:
+        return {
+            'Size':      f'{w} × {h} mm',
+            'LHG Code':  glass_line['lhg_code'] or '—',
+            'Thickness': '—',
+            'Area (m²)': '—',
+            'Weight':    'Skipped (irregular shape)',
+            '_skip':     True,
+        }
+
+    area     = (w / 1000) * (h / 1000)
+    lhg_code = glass_line['lhg_code']
+
+    if lhg_code and lhg_code in glass_lookup:
+        thickness = glass_lookup[lhg_code]
+        weight    = area * thickness * GLASS_DENSITY
+
+        # Stamp the computed weight back onto the PDF next to the glass line
+        page.insert_text(
+            (page_width - 90, glass_line['y_base']),
+            f'[{weight:.1f} kg]',
+            fontsize=glass_line['font_size'],
+            fontname='helv',
+            color=(0.0, 0.0, 0.0),
+        )
+
+        return {
+            'Size':      f'{w} × {h} mm',
+            'LHG Code':  lhg_code,
+            'Thickness': f'{thickness:.0f} mm',
+            'Area (m²)': f'{area:.3f}',
+            'Weight':    f'{weight:.1f} kg',
+            '_skip':     False,
+        }
+
+    # Multiple codes or unrecognised code — no annotation written to PDF
+    return {
+        'Size':      f'{w} × {h} mm',
+        'LHG Code':  lhg_code or 'Multiple codes — skipped',
+        'Thickness': '—',
+        'Area (m²)': f'{area:.3f}',
+        'Weight':    'No LHG match' if lhg_code else 'Multiple codes — skipped',
+        '_skip':     False,
+    }
+
+
+def process_glass_weights(page, glass_lookup):
+    """
+    Full mass-calculator pass for a single page: extract glass/size data,
+    match them up, compute + stamp weights, and return the result rows.
+    """
+    size_entries, glass_lines = extract_size_and_glass_lines(page)
+    page_width = page.rect.width
+
+    rows = []
+    for glass_line in glass_lines:
+        size_entry = match_glass_to_size(glass_line, size_entries)
+        if size_entry is None:
+            continue
+        rows.append(compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width))
+    return rows
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  MODULE 3 — LEGEND PAGE ADDER
+#  Checks whether the legend page is already in the quote, and appends the
+#  standard legend PDF to the end if it's missing.
+# ═════════════════════════════════════════════════════════════════════════
+
 def has_legend_page(doc):
     """Return True if any page in doc already contains the legend text."""
     for page in doc:
@@ -101,6 +258,7 @@ def has_legend_page(doc):
         if all(kw in text for kw in LEGEND_KEYWORDS):
             return True
     return False
+
 
 def append_legend_page(doc):
     """
@@ -117,121 +275,30 @@ def append_legend_page(doc):
     legend_doc.close()
     return 'added'
 
-# ── PDF processing ─────────────────────────────────────────────────────────
+
+# ═════════════════════════════════════════════════════════════════════════
+#  ORCHESTRATOR — runs the three modules above, in order, on the uploaded PDF
+# ═════════════════════════════════════════════════════════════════════════
+
 def process_pdf(file_bytes, glass_lookup):
     doc     = fitz.open(stream=file_bytes, filetype="pdf")
     results = []
 
-    # Load logo once if it exists
-    logo_bytes = None
-    logo_path  = os.path.join(os.path.dirname(__file__), "Logikhaus_logo.jpg")
-    if os.path.exists(logo_path):
-        with open(logo_path, "rb") as f:
-            logo_bytes = f.read()
-
     for page_num, page in enumerate(doc):
-        # Stamp logo on first page only
-        if logo_bytes and page_num == 0:
-            logo_rect = fitz.Rect(20, 25, 138, 118)
-            page.insert_image(logo_rect, stream=logo_bytes)
+        if page_num == 0:
+            stamp_logo(page)                                        # Module 1
+        results.extend(process_glass_weights(page, glass_lookup))   # Module 2
 
-        blocks       = page.get_text('dict')['blocks']
-        size_entries = []
-        glass_lines  = []
-
-        for b in blocks:
-            if 'lines' not in b:
-                continue
-            for line in b['lines']:
-                spans     = line['spans']
-                full_text = ''.join(s['text'] for s in spans).strip()
-
-                # Size line
-                m = re.search(r'size \(W x H\):\s*(\d+)\s*x\s*(\d+)', full_text)
-                if m:
-                    w, h  = int(m.group(1)), int(m.group(2))
-                    y_mid = (spans[0]['bbox'][1] + spans[0]['bbox'][3]) / 2
-                    size_entries.append((y_mid, w, h, False))
-
-                # Irregular shape markers
-                if re.search(r'ANGLE EXTRA|ARCH EXTRA', full_text, re.IGNORECASE):
-                    if size_entries:
-                        y, w, h, _ = size_entries[-1]
-                        size_entries[-1] = (y, w, h, True)
-
-                # Glass line — only use code if exactly one LHG code present
-                if full_text.startswith('Glass:') or full_text.startswith('glass:'):
-                    lhg_matches    = re.findall(r'LHG\d+', full_text)
-                    lhg_code_found = lhg_matches[0] if len(lhg_matches) == 1 else None
-                    last           = spans[-1]
-                    bbox           = last['bbox']
-                    glass_lines.append({
-                        'y_mid':     (bbox[1] + bbox[3]) / 2,
-                        'y_base':    bbox[1] + last['size'] * 0.85,
-                        'font_size': last['size'],
-                        'lhg_code':  lhg_code_found,
-                    })
-
-        page_width = page.rect.width
-
-        for gl in glass_lines:
-            above = [(abs(gl['y_mid'] - s[0]), s)
-                     for s in size_entries if s[0] < gl['y_mid']]
-            if not above:
-                continue
-            _, (_, w, h, irregular) = min(above, key=lambda x: x[0])
-
-            if irregular:
-                results.append({
-                    'Size':      f'{w} × {h} mm',
-                    'LHG Code':  gl['lhg_code'] or '—',
-                    'Thickness': '—',
-                    'Area (m²)': '—',
-                    'Weight':    'Skipped (irregular shape)',
-                    '_skip':     True,
-                })
-                continue
-
-            area     = (w / 1000) * (h / 1000)
-            lhg_code = gl['lhg_code']
-
-            if lhg_code and lhg_code in glass_lookup:
-                # Clean single match — annotate PDF and record result
-                thickness = glass_lookup[lhg_code]
-                weight    = area * thickness * GLASS_DENSITY
-                label     = f'[{weight:.1f} kg]'
-                results.append({
-                    'Size':      f'{w} × {h} mm',
-                    'LHG Code':  lhg_code,
-                    'Thickness': f'{thickness:.0f} mm',
-                    'Area (m²)': f'{area:.3f}',
-                    'Weight':    f'{weight:.1f} kg',
-                    '_skip':     False,
-                })
-                page.insert_text(
-                    (page_width - 90, gl['y_base']),
-                    label,
-                    fontsize=gl['font_size'],
-                    fontname='helv',
-                    color=(0.0, 0.0, 0.0),
-                )
-            else:
-                # Multiple codes or unrecognised — no annotation on PDF
-                results.append({
-                    'Size':      f'{w} × {h} mm',
-                    'LHG Code':  lhg_code or 'Multiple codes — skipped',
-                    'Thickness': '—',
-                    'Area (m²)': f'{area:.3f}',
-                    'Weight':    'No LHG match' if lhg_code else 'Multiple codes — skipped',
-                    '_skip':     False,
-                })
-
-    # ── Append legend page (if not already present) ────────────────────────
-    legend_status = append_legend_page(doc)
+    legend_status = append_legend_page(doc)                         # Module 3
 
     out_bytes = doc.tobytes()
     doc.close()
     return out_bytes, results, legend_status
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  STREAMLIT UI
+# ═════════════════════════════════════════════════════════════════════════
 
 # ── Load glass lookup ──────────────────────────────────────────────────────
 try:
