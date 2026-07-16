@@ -273,7 +273,7 @@ def process_glass_weights(page, glass_lookup):
         rows.append(compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width))
     return rows
 
-
+'''
 # ═════════════════════════════════════════════════════════════════════════
 #  MODULE 2b — FRAME CODE LOOKUP CONNECTION  (setup only — matching logic
 #  to follow in a later step)
@@ -380,7 +380,7 @@ def load_frame_rules():
                 match_strings.append(cell)
             sections[current_section][col_a] = match_strings
 
-    return sections
+    return sections'''
 
 
 # ═════════════════════════════════════════════════════════════════════════
