@@ -149,17 +149,19 @@ def extract_size_and_glass_lines(page):
                     y, w, h, _ = size_entries[-1]
                     size_entries[-1] = (y, w, h, True)
 
-            # Glass line — only use code if exactly one LHG code present
+            # Glass line — keep the raw match list so downstream code can
+            # tell "no code found" apart from "multiple codes found"
             if full_text.startswith('Glass:') or full_text.startswith('glass:'):
                 lhg_matches    = re.findall(r'LHG\d+', full_text)
                 lhg_code_found = lhg_matches[0] if len(lhg_matches) == 1 else None
                 last           = spans[-1]
                 bbox           = last['bbox']
                 glass_lines.append({
-                    'y_mid':     (bbox[1] + bbox[3]) / 2,
-                    'y_base':    bbox[1] + last['size'] * 0.85,
-                    'font_size': last['size'],
-                    'lhg_code':  lhg_code_found,
+                    'y_mid':       (bbox[1] + bbox[3]) / 2,
+                    'y_base':      bbox[1] + last['size'] * 0.85,
+                    'font_size':   last['size'],
+                    'lhg_code':    lhg_code_found,
+                    'lhg_matches': lhg_matches,   # full list: [] = none found, 2+ = ambiguous
                 })
 
     return size_entries, glass_lines
@@ -178,11 +180,10 @@ def match_glass_to_size(glass_line, size_entries):
 def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
     """
     Given one glass line matched to one size entry:
-      - if the LHG code is found in glass_lookup -> stamp & return the weight
-      - if a single LHG code was detected but isn't in glass_lookup -> fall
-        back to stamping the area instead, so something useful still ends
-        up on the quote
-      - if multiple LHG codes were found on the line (ambiguous) -> skip,
+      - if a single LHG code is found in glass_lookup -> stamp & return the weight
+      - if a single LHG code was detected but isn't in glass_lookup -> area fallback
+      - if NO LHG code was found on the line at all -> area fallback
+      - if multiple LHG codes were found on the line (genuinely ambiguous) -> skip,
         no annotation written
     """
     _, w, h, irregular = size_entry
@@ -197,8 +198,9 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
             '_skip':     True,
         }
 
-    area     = (w / 1000) * (h / 1000)
-    lhg_code = glass_line['lhg_code']
+    area        = (w / 1000) * (h / 1000)
+    lhg_code    = glass_line['lhg_code']
+    lhg_matches = glass_line.get('lhg_matches', [])
 
     if lhg_code and lhg_code in glass_lookup:
         thickness = glass_lookup[lhg_code]
@@ -222,33 +224,33 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
             '_skip':     False,
         }
 
-    # Single LHG code detected, but it's not in the glass lookup table —
-    # fall back to stamping the area instead of a weight, since we can't
-    # determine thickness without a matching code.
-    if lhg_code and lhg_code not in glass_lookup:
-        page.insert_text(
-            (page_width - 90, glass_line['y_base']),
-            f'[{area:.3f} m²]',
-            fontsize=glass_line['font_size'],
-            fontname='helv',
-            color=(0.0, 0.0, 0.0),
-        )
+    # Genuinely ambiguous: 2+ LHG codes found on the line — skip entirely
+    if len(lhg_matches) > 1:
         return {
             'Size':      f'{w} × {h} mm',
-            'LHG Code':  lhg_code,
+            'LHG Code':  'Multiple codes — skipped',
             'Thickness': '—',
             'Area (m²)': f'{area:.3f}',
-            'Weight':    f'No LHG match — area shown ({area:.3f} m²)',
+            'Weight':    'Multiple codes — skipped',
             '_skip':     False,
         }
 
-    # Multiple codes detected on the line — genuinely ambiguous, skip entirely
+    # No code found, OR a single code was found but isn't in glass_lookup —
+    # fall back to stamping the area instead of a weight.
+    page.insert_text(
+        (page_width - 90, glass_line['y_base']),
+        f'[{area:.3f} m²]',
+        fontsize=glass_line['font_size'],
+        fontname='helv',
+        color=(0.0, 0.0, 0.0),
+    )
+    label = lhg_code if lhg_code else 'No LHG code'
     return {
         'Size':      f'{w} × {h} mm',
-        'LHG Code':  'Multiple codes — skipped',
+        'LHG Code':  label,
         'Thickness': '—',
         'Area (m²)': f'{area:.3f}',
-        'Weight':    'Multiple codes — skipped',
+        'Weight':    f'No LHG match — area shown ({area:.3f} m²)',
         '_skip':     False,
     }
 
