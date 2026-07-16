@@ -75,10 +75,6 @@ LOGO_RECT = fitz.Rect(20, 25, 138, 118)   # position of the stamped logo on page
 LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND_page_for_Schedule.pdf")
 LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 
-# Separate spreadsheet holding frame code definitions (tab "CODES")
-# and the matching rules used to pick a code from quote text (tab "RULES").
-FRAME_SHEET_ID = '1ZDmP5EPjKsxc7bDYX2cqSYuZQi_8m0Ah'
-
 
 # ═════════════════════════════════════════════════════════════════════════
 #  MODULE 1 — LOGO STAMPER
@@ -340,30 +336,6 @@ except Exception as e:
     import traceback
     st.code(traceback.format_exc())
     st.stop()
-
-# ── TEMP: Frame code sheet connection check ─────────────────────────────────
-# This block just proves the connection works and shows the two tabs' shape.
-# Remove/replace once the matching logic (Module 4) is built.
-try:
-    with st.spinner('Loading frame code data...'):
-        frame_codes = load_frame_codes()
-        frame_rules = load_frame_rules()
-    st.markdown(
-        f'<div class="status-box">✓ Frame code data loaded — '
-        f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
-        unsafe_allow_html=True
-    )
-    with st.expander("Debug: preview CODES / RULES tabs"):
-        st.write("CODES tab — first 3 rows:")
-        st.write(frame_codes[:3])
-        st.write("RULES tab — parsed sections:")
-        for category, code_map in frame_rules.items():
-            st.write(f"**{category}**")
-            st.write(code_map)
-except Exception as e:
-    st.error(f'Could not connect to frame code sheet: {type(e).__name__}: {e}')
-    import traceback
-    st.code(traceback.format_exc())
 
 # ── File upload ────────────────────────────────────────────────────────────
 st.markdown("### Upload schedule")
