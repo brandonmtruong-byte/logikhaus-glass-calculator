@@ -72,7 +72,7 @@ GLASS_DENSITY = 2.5   # kg per m² per mm
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logikhaus_logo.jpg")
 LOGO_RECT = fitz.Rect(20, 25, 138, 118)   # position of the stamped logo on page 1
 
-LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND_page_for_Schedule.pdf")
+LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND page for Schedule.pdf")
 LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 
 
