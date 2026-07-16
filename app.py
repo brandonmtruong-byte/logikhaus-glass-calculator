@@ -8,7 +8,7 @@ import os
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDF Processor",
+    page_title="Logikhaus Glass Calculator",
     page_icon="🪟",
     layout="centered"
 )
@@ -59,7 +59,7 @@ with col_logo:
 with col_title:
     st.markdown("""
     <div style="padding-top: 1rem;">
-        <div class="lh-title">PDF Processor</div>
+        <div class="lh-title">Glass Weight Calculator</div>
         <div class="lh-sub">Logikhaus Pty Ltd — internal tool</div>
     </div>
     """, unsafe_allow_html=True)
@@ -72,8 +72,12 @@ GLASS_DENSITY = 2.5   # kg per m² per mm
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "Logikhaus_logo.jpg")
 LOGO_RECT = fitz.Rect(20, 25, 138, 118)   # position of the stamped logo on page 1
 
-LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND page for Schedule.pdf")
+LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND_page_for_Schedule.pdf")
 LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
+
+# Separate spreadsheet holding frame code definitions (tab "CODES")
+# and the matching rules used to pick a code from quote text (tab "RULES").
+FRAME_SHEET_ID = '1ZDmP5EPjKsxc7bDYX2cqSYuZQi_8m0Ah'
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -177,8 +181,13 @@ def match_glass_to_size(glass_line, size_entries):
 
 def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
     """
-    Given one glass line matched to one size entry, compute weight (if possible),
-    stamp the weight label onto the page, and return a result row (dict) for the table.
+    Given one glass line matched to one size entry:
+      - if the LHG code is found in glass_lookup -> stamp & return the weight
+      - if a single LHG code was detected but isn't in glass_lookup -> fall
+        back to stamping the area instead, so something useful still ends
+        up on the quote
+      - if multiple LHG codes were found on the line (ambiguous) -> skip,
+        no annotation written
     """
     _, w, h, irregular = size_entry
 
@@ -217,13 +226,33 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
             '_skip':     False,
         }
 
-    # Multiple codes or unrecognised code — no annotation written to PDF
+    # Single LHG code detected, but it's not in the glass lookup table —
+    # fall back to stamping the area instead of a weight, since we can't
+    # determine thickness without a matching code.
+    if lhg_code and lhg_code not in glass_lookup:
+        page.insert_text(
+            (page_width - 90, glass_line['y_base']),
+            f'[{area:.3f} m²]',
+            fontsize=glass_line['font_size'],
+            fontname='helv',
+            color=(0.0, 0.0, 0.0),
+        )
+        return {
+            'Size':      f'{w} × {h} mm',
+            'LHG Code':  lhg_code,
+            'Thickness': '—',
+            'Area (m²)': f'{area:.3f}',
+            'Weight':    f'No LHG match — area shown ({area:.3f} m²)',
+            '_skip':     False,
+        }
+
+    # Multiple codes detected on the line — genuinely ambiguous, skip entirely
     return {
         'Size':      f'{w} × {h} mm',
-        'LHG Code':  lhg_code or 'Multiple codes — skipped',
+        'LHG Code':  'Multiple codes — skipped',
         'Thickness': '—',
         'Area (m²)': f'{area:.3f}',
-        'Weight':    'No LHG match' if lhg_code else 'Multiple codes — skipped',
+        'Weight':    'Multiple codes — skipped',
         '_skip':     False,
     }
 
@@ -243,6 +272,115 @@ def process_glass_weights(page, glass_lookup):
             continue
         rows.append(compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width))
     return rows
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  MODULE 2b — FRAME CODE LOOKUP CONNECTION  (setup only — matching logic
+#  to follow in a later step)
+#  Connects to the FRAME_SHEET_ID spreadsheet and loads both the CODES tab
+#  (frame code -> attributes) and the RULES tab (matching-string rules)
+#  into memory, so the matcher can be built against them next.
+# ═════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300)
+def load_frame_codes():
+    """
+    Load the CODES tab: each row maps a Frame code (e.g. LHF001) to its
+    attributes (System, Glass type, Opening type, MATERIAL, THRESHOLD, ...).
+    Returned as a list of dicts, keyed by the sheet's own header row.
+    """
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(FRAME_SHEET_ID)
+    ws = sh.worksheet("CODES")
+    return ws.get_all_records()  # list of dicts, using row 1 as headers
+
+
+@st.cache_data(ttl=300)
+def load_frame_rules():
+    """
+    Load the RULES tab.
+
+    Unlike CODES, this tab is NOT one flat table — it's five stacked
+    mini-tables, one per attribute category (SYSTEM, GLASS TYPE,
+    OPENING TYPE, MATERIAL, THRESHOLD). Each mini-table looks like:
+
+        SYSTEM          string to match
+        ALUCLAD68       Aluclad Timber 68
+        ALUCLAD88       Aluclad Timber 88
+        ...
+        <blank row>
+
+        GLASS TYPE      string to match
+        DG              PHPP FILE COLUMN H = "DG"
+        ...
+
+    Some rows OR multiple match strings together across columns B, C, D...
+    e.g. "PINE/MERANTI/LARCH | pine | OR meranti | OR larch" means the code
+    matches if the text contains "pine", "meranti", OR "larch".
+
+    A few THRESHOLD rules aren't plain text matches at all — they reference
+    the *result* of another category (e.g. NONE = opening type is one of
+    several window types) or use negation (STEPPED = NOT ZERO and NOT
+    SLOPED). Those are kept as raw strings here and handled specially by
+    the matcher, not treated as literal substrings to search for.
+
+    Returns a dict keyed by category name, e.g.:
+        {
+          "SYSTEM":       {"ALUCLAD68": ["Aluclad Timber 68"], ...},
+          "GLASS TYPE":   {"DG": ['PHPP FILE COLUMN H = "DG"'], ...},
+          "OPENING TYPE": {"LIFT AND SLIDE DOOR": ["Wheels: max 400kg", "Wheels: max 250kg"], ...},
+          "MATERIAL":     {...},
+          "THRESHOLD":    {...},
+        }
+    """
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(FRAME_SHEET_ID)
+    ws = sh.worksheet("RULES")
+    raw_rows = ws.get_all_values()
+
+    sections = {}
+    current_section = None
+
+    for row in raw_rows:
+        col_a = row[0].strip() if len(row) > 0 else ''
+        col_b = row[1].strip() if len(row) > 1 else ''
+
+        # Blank row (no code in column A) ends the current section
+        if not col_a:
+            current_section = None
+            continue
+
+        # Section header row, e.g. "SYSTEM" | "string to match"
+        if col_b.lower() == 'string to match':
+            current_section = col_a
+            sections[current_section] = {}
+            continue
+
+        # Data row within a section: column A = code, B onward = OR'd match strings
+        if current_section:
+            match_strings = []
+            for cell in row[1:]:
+                cell = cell.strip()
+                if not cell:
+                    continue
+                if cell.upper().startswith('OR '):
+                    cell = cell[3:].strip()
+                match_strings.append(cell)
+            sections[current_section][col_a] = match_strings
+
+    return sections
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -311,6 +449,30 @@ except Exception as e:
     import traceback
     st.code(traceback.format_exc())
     st.stop()
+
+# ── TEMP: Frame code sheet connection check ─────────────────────────────────
+# This block just proves the connection works and shows the two tabs' shape.
+# Remove/replace once the matching logic (Module 4) is built.
+try:
+    with st.spinner('Loading frame code data...'):
+        frame_codes = load_frame_codes()
+        frame_rules = load_frame_rules()
+    st.markdown(
+        f'<div class="status-box">✓ Frame code data loaded — '
+        f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
+        unsafe_allow_html=True
+    )
+    with st.expander("Debug: preview CODES / RULES tabs"):
+        st.write("CODES tab — first 3 rows:")
+        st.write(frame_codes[:3])
+        st.write("RULES tab — parsed sections:")
+        for category, code_map in frame_rules.items():
+            st.write(f"**{category}**")
+            st.write(code_map)
+except Exception as e:
+    st.error(f'Could not connect to frame code sheet: {type(e).__name__}: {e}')
+    import traceback
+    st.code(traceback.format_exc())
 
 # ── File upload ────────────────────────────────────────────────────────────
 st.markdown("### Upload schedule")
