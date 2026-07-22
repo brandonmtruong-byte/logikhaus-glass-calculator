@@ -308,8 +308,7 @@ def append_legend_page(doc):
     return 'added'
 
 # ═════════════════════════════════════════════════════════════════════════
-#  MODULE 4 — FRAME CODE LOOKUP CONNECTION  (setup only — matching logic
-#  to follow in a later step)
+#  MODULE 4 — FRAME CODE LOOKUP CONNECTION
 #  Connects to the FRAME_SHEET_ID spreadsheet and loads:
 #    - the CODES tab: frame code (LHF001, ...) -> attributes
 #    - the RULESUPDATE tab: rules used to work out those attributes from
@@ -344,20 +343,22 @@ def load_frame_codes():
 @st.cache_data(ttl=300)
 def load_frame_rules():
     """
-    Load the RULESUPDATE tab. This is now a flat table:
+    Load the RULESUPDATE tab. This is a flat table:
 
-        Category | Code | Match Type | Match Value
-        System   | ALU75 | text      | Aluminium 75
+        Category | Code | Match Type | Match Value | Include | Exclude
+        System   | ALU75 | text      | Aluminium 75 |         |
         ...
 
-    Match Type tells the (future) matcher how to use Match Value:
-      - 'text'  : literal substring search in the quote text
-      - 'table' : looked up from a table/column rather than free text
+    Match Type tells the matcher how to use each row:
+      - 'text'  : literal substring search in the quote text (Match Value)
+      - 'table' : same as 'text' for now (Match Value)
       - 'oType' : depends on the already-resolved Opening Type category
-      - 'logic' : a small boolean expression (e.g. "not X and not Y")
+                  (Match Value holds the Opening Type code to compare against)
+      - 'logic' : uses the Include / Exclude columns — all Include terms
+                  must be present, all Exclude terms must be absent
 
     Returned as a list of dicts (one per rule row), keyed by the sheet's
-    own header row — no section-parsing needed now that the tab is flat.
+    own header row.
     """
     sh = _open_frame_sheet()
     ws = sh.worksheet(FRAME_RULES_TAB)
@@ -372,11 +373,11 @@ def load_frame_rules():
 #  categories can't be pinned down to exactly one code, the window is
 #  flagged as an error and nothing is stamped.
 # ═════════════════════════════════════════════════════════════════════════
- 
+
 # Order matters: Threshold's 'oType' rules depend on Opening Type already
 # being resolved, so Threshold must be resolved last.
 CATEGORY_ORDER = ['System', 'Glass Type', 'Opening Type', 'Material', 'Threshold']
- 
+
 # Maps a resolved category name to its column name in the CODES tab.
 CODES_COLUMN_MAP = {
     'System':       'System',
@@ -385,8 +386,8 @@ CODES_COLUMN_MAP = {
     'Material':     'MATERIAL',
     'Threshold':    'THRESHOLD',
 }
- 
- 
+
+
 def extract_page_lines(page):
     """Return every text line on the page, top-to-bottom, with position info."""
     blocks = page.get_text('dict')['blocks']
@@ -410,8 +411,8 @@ def extract_page_lines(page):
             })
     lines.sort(key=lambda l: l['y_mid'])
     return lines
- 
- 
+
+
 def split_into_window_blocks(lines):
     """
     Split a page's lines into one block per window, each starting at its
@@ -429,24 +430,24 @@ def split_into_window_blocks(lines):
     if current:
         blocks.append(current)
     return blocks
- 
- 
+
+
 def find_system_line(block_lines):
     """Find the line starting with 'System:' within a window block, if any."""
     for line in block_lines:
         if line['text'].lower().startswith('system:'):
             return line
     return None
- 
- 
+
+
 def group_rules_by_category(frame_rules):
     """Turn the flat RULESUPDATE rows into {category: {code: [rule_rows]}}."""
     grouped = {}
     for row in frame_rules:
         grouped.setdefault(row['Category'], {}).setdefault(row['Code'], []).append(row)
     return grouped
- 
- 
+
+
 def evaluate_logic_rule(rule_row, text_lower):
     """
     Evaluate a 'logic' rule using its Include/Exclude columns, e.g.:
@@ -457,37 +458,58 @@ def evaluate_logic_rule(rule_row, text_lower):
     includes = [t.strip().lower() for t in str(rule_row.get('Include', '')).split(',') if t.strip()]
     excludes = [t.strip().lower() for t in str(rule_row.get('Exclude', '')).split(',') if t.strip()]
     return all(t in text_lower for t in includes) and all(t not in text_lower for t in excludes)
- 
- 
-def evaluate_rule(rule_row, block_text_lower, resolved_so_far):
+
+
+def extract_lhg_code(block_text):
+    """
+    Find the single LHG code within a window's raw (non-lowercased) block
+    text, e.g. from its 'Glass: ... LHG012 ...' line. Returns None if zero
+    or multiple codes are found (ambiguous either way).
+    """
+    matches = re.findall(r'LHG\d+', block_text)
+    return matches[0] if len(matches) == 1 else None
+
+
+def evaluate_rule(rule_row, block_text_lower, resolved_so_far, glass_type_lookup=None, lhg_code=None):
     """Evaluate a single RULESUPDATE row against a window's block text."""
     match_type  = rule_row['Match Type'].strip().lower()
     match_value = str(rule_row['Match Value']).strip()
- 
-    if match_type in ('text', 'table'):
+
+    if match_type == 'text':
         return match_value.lower() in block_text_lower
+    if match_type == 'table':
+        # Glass Type: look up the window's LHG code in the glass sheet's
+        # column G (DG/TG/VT/VP) rather than searching quote text directly.
+        if not lhg_code or not glass_type_lookup:
+            return False
+        looked_up = glass_type_lookup.get(lhg_code)
+        if not looked_up:
+            return False
+        return looked_up.strip().lower() == match_value.lower()
     if match_type == 'otype':
         return resolved_so_far.get('Opening Type') == match_value
     if match_type == 'logic':
         return evaluate_logic_rule(rule_row, block_text_lower)
     return False   # unknown match type — never matches
- 
- 
-def resolve_categories(block_text, rules_by_category):
+
+
+def resolve_categories(block_text, rules_by_category, glass_type_lookup=None):
     """
     Resolve all 5 categories for one window's block text.
     Returns (resolved_dict, error_list). error_list is empty only when all
     5 categories resolved to exactly one code each.
     """
     block_text_lower = block_text.lower()
+    lhg_code          = extract_lhg_code(block_text)
     resolved = {}
     errors   = []
- 
+
     for category in CATEGORY_ORDER:
         rules_for_category = rules_by_category.get(category, {})
         matched_codes = [
             code for code, rule_rows in rules_for_category.items()
-            if any(evaluate_rule(r, block_text_lower, resolved) for r in rule_rows)
+            if any(evaluate_rule(r, block_text_lower, resolved, glass_type_lookup, lhg_code)
+                   for r in rule_rows)
         ]
         if len(matched_codes) == 1:
             resolved[category] = matched_codes[0]
@@ -495,10 +517,10 @@ def resolve_categories(block_text, rules_by_category):
             errors.append(f'{category}: no match found')
         else:
             errors.append(f'{category}: ambiguous ({", ".join(matched_codes)})')
- 
+
     return resolved, errors
- 
- 
+
+
 def match_frame_code(resolved, frame_codes):
     """Look up the resolved 5-tuple in the CODES tab. Returns (frame_code, error)."""
     matches = [
@@ -511,14 +533,14 @@ def match_frame_code(resolved, frame_codes):
     if len(matches) == 0:
         return None, 'No matching row in CODES tab'
     return None, f'Multiple CODES rows match ({len(matches)})'
- 
- 
-def process_frame_codes(page, frame_codes, rules_by_category):
+
+
+def process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup=None):
     """
     Full frame-code pass for a single page: split into window blocks,
     resolve + look up a frame code for each, stamp it above 'System:',
     and return a result row per window for the on-screen debug table.
- 
+
     Every result row always has one column per category (System, Glass
     Type, Opening Type, Material, Threshold) — filled in with whatever was
     resolved, blank if that category failed — plus Frame Code and Details,
@@ -527,13 +549,13 @@ def process_frame_codes(page, frame_codes, rules_by_category):
     lines          = extract_page_lines(page)
     window_blocks  = split_into_window_blocks(lines)
     results        = []
- 
+
     for block in window_blocks:
         block_text  = ' | '.join(l['text'] for l in block['lines'])
         system_line = find_system_line(block['lines'])
- 
-        resolved, errors = resolve_categories(block_text, rules_by_category)
- 
+
+        resolved, errors = resolve_categories(block_text, rules_by_category, glass_type_lookup)
+
         # Base row always shows what was (or wasn't) resolved per category
         row = {
             'Window':     block['pos_label'],
@@ -541,18 +563,18 @@ def process_frame_codes(page, frame_codes, rules_by_category):
             **{cat: resolved.get(cat, '') for cat in CATEGORY_ORDER},
             'Details':    '',
         }
- 
+
         if errors:
             row['Details'] = '; '.join(errors)
             results.append(row)
             continue
- 
+
         frame_code, lookup_error = match_frame_code(resolved, frame_codes)
         if lookup_error:
             row['Details'] = lookup_error
             results.append(row)
             continue
- 
+
         if system_line:
             page.insert_text(
                 (system_line['bbox'][0], system_line['bbox'][1] - 2),
@@ -561,46 +583,49 @@ def process_frame_codes(page, frame_codes, rules_by_category):
                 fontname='helv',
                 color=(0.0, 0.0, 0.0),
             )
- 
+
         row['Frame Code'] = frame_code
         row['Details']    = 'OK'
         results.append(row)
- 
+
     return results
- 
+
 # ═════════════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR — runs Modules 1, 2, 3, and 5 on the uploaded PDF.
 # ═════════════════════════════════════════════════════════════════════════
- 
-def process_pdf(file_bytes, glass_lookup, frame_codes=None, frame_rules=None):
+
+def process_pdf(file_bytes, glass_lookup, frame_codes=None, frame_rules=None, glass_type_lookup=None):
     doc     = fitz.open(stream=file_bytes, filetype="pdf")
     results = []
     frame_results = []
- 
+
     rules_by_category = group_rules_by_category(frame_rules) if frame_rules else {}
- 
+
     for page_num, page in enumerate(doc):
         if page_num == 0:
             stamp_logo(page)                                        # Module 1
         results.extend(process_glass_weights(page, glass_lookup))   # Module 2
         if frame_codes is not None and frame_rules is not None:
-            frame_results.extend(process_frame_codes(page, frame_codes, rules_by_category))  # Module 5
- 
+            frame_results.extend(
+                process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup)  # Module 5
+            )
+
     legend_status = append_legend_page(doc)                         # Module 3
- 
+
     out_bytes = doc.tobytes()
     doc.close()
     return out_bytes, results, legend_status, frame_results
- 
- 
+
+
 # ═════════════════════════════════════════════════════════════════════════
 #  STREAMLIT UI
 # ═════════════════════════════════════════════════════════════════════════
- 
+
 # ── Load glass lookup ──────────────────────────────────────────────────────
 try:
     with st.spinner('Loading glass data from sheet...'):
-        glass_lookup = load_glass_lookup()
+        glass_lookup      = load_glass_lookup()
+        glass_type_lookup = load_glass_type_lookup()
     st.markdown(f'<div class="status-box">✓ Glass database loaded — {len(glass_lookup)} codes</div>',
                 unsafe_allow_html=True)
 except Exception as e:
@@ -608,7 +633,7 @@ except Exception as e:
     import traceback
     st.code(traceback.format_exc())
     st.stop()
- 
+
 # ── Load frame code data (Module 4 connection) ──────────────────────────────
 frame_codes, frame_rules = None, None
 try:
@@ -628,7 +653,7 @@ try:
 except Exception as e:
     st.warning(f'Could not load frame code sheet — frame code matching will be skipped. '
                f'({type(e).__name__}: {e})')
- 
+
 # ── File upload ────────────────────────────────────────────────────────────
 st.markdown("### Upload schedule")
 uploaded = st.file_uploader(
@@ -636,15 +661,15 @@ uploaded = st.file_uploader(
     type="pdf",
     label_visibility="collapsed"
 )
- 
+
 if uploaded:
     st.markdown("---")
     with st.spinner('Processing PDF...'):
         file_bytes = uploaded.read()
         annotated_bytes, rows, legend_status, frame_results = process_pdf(
-            file_bytes, glass_lookup, frame_codes, frame_rules
+            file_bytes, glass_lookup, frame_codes, frame_rules, glass_type_lookup
         )
- 
+
     # ── Legend status feedback ──────────────────────────────────────────────
     if legend_status == 'added':
         st.markdown('<div class="status-box">✓ Legend page appended to end of quote</div>',
@@ -654,11 +679,11 @@ if uploaded:
                      unsafe_allow_html=True)
     elif legend_status == 'missing_file':
         st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder — legend page was not added.')
- 
+
     # ── Summary table ──────────────────────────────────────────────────────
     st.markdown("### Results")
     df = pd.DataFrame([{k: v for k, v in r.items() if k != '_skip'} for r in rows])
- 
+
     def highlight_row(row):
         original = rows[row.name]
         if original.get('_skip'):
@@ -666,13 +691,13 @@ if uploaded:
         if 'No LHG' in str(row.get('Weight', '')) or 'skipped' in str(row.get('Weight', '')):
             return ['color: #c0392b'] * len(row)
         return [''] * len(row)
- 
+
     st.dataframe(
         df.style.apply(highlight_row, axis=1),
         use_container_width=True,
         hide_index=True,
     )
- 
+
     # Totals
     weights = []
     for r in rows:
@@ -681,24 +706,24 @@ if uploaded:
                 weights.append(float(r['Weight'].replace(' kg', '')))
             except ValueError:
                 pass
- 
+
     if weights:
         col1, col2 = st.columns(2)
         col1.metric("Total glass items", len(rows))
         col2.metric("Total estimated weight", f"{sum(weights):.1f} kg")
- 
+
     st.markdown("---")
- 
+
     # ── Frame code results ───────────────────────────────────────────────────
     if frame_results:
         st.markdown("### Frame codes")
         frame_df = pd.DataFrame(frame_results)
- 
+
         def highlight_frame_row(row):
             if row.get('Frame Code') == 'ERROR':
                 return ['color: #c0392b'] * len(row)
             return [''] * len(row)
- 
+
         st.dataframe(
             frame_df.style.apply(highlight_frame_row, axis=1),
             use_container_width=True,
@@ -707,9 +732,9 @@ if uploaded:
         error_count = sum(1 for r in frame_results if r['Frame Code'] == 'ERROR')
         if error_count:
             st.warning(f'{error_count} window(s) could not be matched to a frame code — see Details above.')
- 
+
         st.markdown("---")
- 
+
     # ── Download ───────────────────────────────────────────────────────────
     st.markdown("### Download annotated PDF")
     out_name = uploaded.name.replace('.pdf', '_with_weights.pdf')
