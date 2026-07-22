@@ -77,7 +77,7 @@ LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 
 # Separate spreadsheet holding frame code definitions (tab "CODES")
 # and the matching rules used to pick a code from quote text (tab "RULESUPDATE").
-FRAME_SHEET_ID = '1ZDmP5EPjKsxc7bDYX2cqSYuZQi_8m0Ah'
+FRAME_SHEET_ID = '1Ieyvx0ZgSBToQFCDGXM8d8xK3zaxqKnXmLdK8ir79n4'
 FRAME_RULES_TAB = 'RULESUPDATE'
 
 
