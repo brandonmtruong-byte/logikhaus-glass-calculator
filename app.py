@@ -124,6 +124,33 @@ def load_glass_lookup():
     return lookup
 
 
+@st.cache_data(ttl=300)
+def load_glass_type_lookup():
+    """
+    Pull LHG code -> glass type code (DG/TG/VT/VP, column G) from the same
+    glass sheet used by load_glass_lookup. Column B holds the LHG code,
+    column G holds the glass type code — used by Module 5's 'table' match
+    type to resolve the Glass Type category.
+    """
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
+    ws = gc.open_by_key(SHEET_ID).get_worksheet_by_id(1019075390)
+    rows = ws.get_all_values()
+    lookup = {}
+    for row in rows[5:]:
+        if len(row) >= 7 and row[1].strip().startswith('LHG'):
+            code       = row[1].strip().split()[0]
+            glass_type = row[6].strip()   # column G
+            if glass_type:
+                lookup[code] = glass_type
+    return lookup
+
+
 def extract_size_and_glass_lines(page):
     """
     Scan a page's text blocks and pull out:
