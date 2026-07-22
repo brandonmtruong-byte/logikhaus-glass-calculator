@@ -75,6 +75,11 @@ LOGO_RECT = fitz.Rect(20, 25, 138, 118)   # position of the stamped logo on page
 LEGEND_PDF_PATH = os.path.join(os.path.dirname(__file__), "LEGEND page for Schedule.pdf")
 LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 
+# Separate spreadsheet holding frame code definitions (tab "CODES")
+# and the matching rules used to pick a code from quote text (tab "RULESUPDATE").
+FRAME_SHEET_ID = '1ZDmP5EPjKsxc7bDYX2cqSYuZQi_8m0Ah'
+FRAME_RULES_TAB = 'RULESUPDATE'
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #  MODULE 1 — LOGO STAMPER
@@ -302,6 +307,61 @@ def append_legend_page(doc):
     legend_doc.close()
     return 'added'
 
+# ═════════════════════════════════════════════════════════════════════════
+#  MODULE 4 — FRAME CODE LOOKUP CONNECTION  (setup only — matching logic
+#  to follow in a later step)
+#  Connects to the FRAME_SHEET_ID spreadsheet and loads:
+#    - the CODES tab: frame code (LHF001, ...) -> attributes
+#    - the RULESUPDATE tab: rules used to work out those attributes from
+#      raw quote text (Category / Code / Match Type / Match Value, one
+#      row per rule)
+# ═════════════════════════════════════════════════════════════════════════
+
+def _open_frame_sheet():
+    """Authenticate and open the frame code spreadsheet (shared helper)."""
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
+    return gc.open_by_key(FRAME_SHEET_ID)
+
+
+@st.cache_data(ttl=300)
+def load_frame_codes():
+    """
+    Load the CODES tab: each row maps a Frame code (e.g. LHF001) to its
+    attributes (System, Glass type, Opening type, Material, Threshold, ...).
+    Returned as a list of dicts, keyed by the sheet's own header row.
+    """
+    sh = _open_frame_sheet()
+    ws = sh.worksheet("CODES")
+    return ws.get_all_records()
+
+
+@st.cache_data(ttl=300)
+def load_frame_rules():
+    """
+    Load the RULESUPDATE tab. This is now a flat table:
+
+        Category | Code | Match Type | Match Value
+        System   | ALU75 | text      | Aluminium 75
+        ...
+
+    Match Type tells the (future) matcher how to use Match Value:
+      - 'text'  : literal substring search in the quote text
+      - 'table' : looked up from a table/column rather than free text
+      - 'oType' : depends on the already-resolved Opening Type category
+      - 'logic' : a small boolean expression (e.g. "not X and not Y")
+
+    Returned as a list of dicts (one per rule row), keyed by the sheet's
+    own header row — no section-parsing needed now that the tab is flat.
+    """
+    sh = _open_frame_sheet()
+    ws = sh.worksheet(FRAME_RULES_TAB)
+    return ws.get_all_records()
 
 # ═════════════════════════════════════════════════════════════════════════
 #  ORCHESTRATOR — runs the three modules above, in order, on the uploaded PDF
