@@ -557,23 +557,28 @@ def process_frame_codes(page, frame_codes, rules_by_category):
     return results
 
 # ═════════════════════════════════════════════════════════════════════════
-#  ORCHESTRATOR — runs the three modules above, in order, on the uploaded PDF
+#  ORCHESTRATOR — runs Modules 1, 2, 3, and 5 on the uploaded PDF.
 # ═════════════════════════════════════════════════════════════════════════
 
-def process_pdf(file_bytes, glass_lookup):
+def process_pdf(file_bytes, glass_lookup, frame_codes=None, frame_rules=None):
     doc     = fitz.open(stream=file_bytes, filetype="pdf")
     results = []
+    frame_results = []
+
+    rules_by_category = group_rules_by_category(frame_rules) if frame_rules else {}
 
     for page_num, page in enumerate(doc):
         if page_num == 0:
             stamp_logo(page)                                        # Module 1
         results.extend(process_glass_weights(page, glass_lookup))   # Module 2
+        if frame_codes is not None and frame_rules is not None:
+            frame_results.extend(process_frame_codes(page, frame_codes, rules_by_category))  # Module 5
 
     legend_status = append_legend_page(doc)                         # Module 3
 
     out_bytes = doc.tobytes()
     doc.close()
-    return out_bytes, results, legend_status
+    return out_bytes, results, legend_status, frame_results
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -592,6 +597,26 @@ except Exception as e:
     st.code(traceback.format_exc())
     st.stop()
 
+# ── Load frame code data (Module 4 connection) ──────────────────────────────
+frame_codes, frame_rules = None, None
+try:
+    with st.spinner('Loading frame code data...'):
+        frame_codes = load_frame_codes()
+        frame_rules = load_frame_rules()
+    st.markdown(
+        f'<div class="status-box">✓ Frame code data loaded — '
+        f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
+        unsafe_allow_html=True
+    )
+    with st.expander("Debug: preview CODES / RULESUPDATE tabs"):
+        st.write("CODES tab — first 3 rows:")
+        st.write(frame_codes[:3])
+        st.write("RULESUPDATE tab — first 5 rows:")
+        st.write(frame_rules[:5])
+except Exception as e:
+    st.warning(f'Could not load frame code sheet — frame code matching will be skipped. '
+               f'({type(e).__name__}: {e})')
+
 # ── File upload ────────────────────────────────────────────────────────────
 st.markdown("### Upload schedule")
 uploaded = st.file_uploader(
@@ -604,7 +629,9 @@ if uploaded:
     st.markdown("---")
     with st.spinner('Processing PDF...'):
         file_bytes = uploaded.read()
-        annotated_bytes, rows, legend_status = process_pdf(file_bytes, glass_lookup)
+        annotated_bytes, rows, legend_status, frame_results = process_pdf(
+            file_bytes, glass_lookup, frame_codes, frame_rules
+        )
 
     # ── Legend status feedback ──────────────────────────────────────────────
     if legend_status == 'added':
@@ -649,6 +676,27 @@ if uploaded:
         col2.metric("Total estimated weight", f"{sum(weights):.1f} kg")
 
     st.markdown("---")
+
+    # ── Frame code results ───────────────────────────────────────────────────
+    if frame_results:
+        st.markdown("### Frame codes")
+        frame_df = pd.DataFrame(frame_results)
+
+        def highlight_frame_row(row):
+            if row.get('Frame Code') == 'ERROR':
+                return ['color: #c0392b'] * len(row)
+            return [''] * len(row)
+
+        st.dataframe(
+            frame_df.style.apply(highlight_frame_row, axis=1),
+            use_container_width=True,
+            hide_index=True,
+        )
+        error_count = sum(1 for r in frame_results if r['Frame Code'] == 'ERROR')
+        if error_count:
+            st.warning(f'{error_count} window(s) could not be matched to a frame code — see Details above.')
+
+        st.markdown("---")
 
     # ── Download ───────────────────────────────────────────────────────────
     st.markdown("### Download annotated PDF")
