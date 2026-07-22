@@ -447,23 +447,10 @@ def group_rules_by_category(frame_rules):
     return grouped
 
 
-def evaluate_logic_expression(expr, text_lower):
-    """
-    Evaluate a small AND/NOT expression against lowercased block text, e.g.
-    'not "HS:- ZERO" and not "ECO PASS"' or '"fitting" and not "Wheels"'.
-    Every term is ANDed together; no OR support needed since alternates are
-    already expressed as separate rule rows.
-    """
-    for term in expr.split(' and '):
-        term   = term.strip()
-        negate = term.lower().startswith('not ')
-        if negate:
-            term = term[4:].strip()
-        term = term.strip('"').strip("'").lower()
-        contains = term in text_lower
-        if negate == contains:   # negate and contains -> fail; not negate and not contains -> fail
-            return False
-    return True
+def evaluate_logic_rule(rule_row, text_lower):
+    includes = [t.strip().lower() for t in str(rule_row.get('Include', '')).split(',') if t.strip()]
+    excludes = [t.strip().lower() for t in str(rule_row.get('Exclude', '')).split(',') if t.strip()]
+    return all(t in text_lower for t in includes) and all(t not in text_lower for t in excludes)
 
 
 def evaluate_rule(rule_row, block_text_lower, resolved_so_far):
