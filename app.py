@@ -474,7 +474,17 @@ def group_rules_by_category(frame_rules):
         grouped.setdefault(row['Category'], {}).setdefault(row['Code'], []).append(row)
     return grouped
 
-
+def _get_field_ci(rule_row, field_name):
+    """
+    Fetch a field from a rule row, tolerant of header mismatches
+    (case, leading/trailing whitespace) that would otherwise silently
+    return '' via a plain dict lookup on the wrong key.
+    """
+    target = field_name.strip().lower()
+    for key, value in rule_row.items():
+        if key.strip().lower() == target:
+            return value
+    return ''
 
 def contains_normalized(haystack_lower, needle):
     """
