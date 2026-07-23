@@ -589,6 +589,7 @@ def process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup=
             'Frame Code': 'ERROR',
             **{cat: resolved.get(cat, '') for cat in CATEGORY_ORDER},
             'Details':    '',
+            'Block Text': block_text,
         }
 
         if errors:
@@ -751,14 +752,20 @@ if uploaded:
                 return ['color: #c0392b'] * len(row)
             return [''] * len(row)
 
+        display_df = frame_df.drop(columns=['Block Text'], errors='ignore')
         st.dataframe(
-            frame_df.style.apply(highlight_frame_row, axis=1),
+            display_df.style.apply(highlight_frame_row, axis=1),
             use_container_width=True,
             hide_index=True,
         )
         error_count = sum(1 for r in frame_results if r['Frame Code'] == 'ERROR')
         if error_count:
             st.warning(f'{error_count} window(s) could not be matched to a frame code — see Details above.')
+
+        with st.expander("Debug: raw block text per window (what the matcher actually saw)"):
+            for r in frame_results:
+                st.write(f"**{r['Window']}** ({r['Frame Code']})")
+                st.code(r.get('Block Text', ''), language=None)
 
         st.markdown("---")
 
