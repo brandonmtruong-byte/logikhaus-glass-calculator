@@ -475,6 +475,21 @@ def group_rules_by_category(frame_rules):
     return grouped
 
 
+
+def contains_normalized(haystack_lower, needle):
+    """
+    Whitespace- and line-break-insensitive substring check. Handles two
+    quirks: (1) stray spaces mid-word from PDF text extraction (e.g.
+    'I nward opening'), and (2) phrases that get word-wrapped across two
+    separate PDF text lines, which our own block-text joining then
+    separates with ' | ' (e.g. '1- | seal threshold'). Stripping both
+    whitespace and '|' before comparing makes matching tolerant of both.
+    """
+    compact_haystack = re.sub(r'[\s|]+', '', haystack_lower)
+    compact_needle    = re.sub(r'[\s|]+', '', needle.lower())
+    return compact_needle in compact_haystack
+
+
 def evaluate_logic_rule(rule_row, text_lower):
     """
     Evaluate a 'logic' rule using its Include/Exclude columns, e.g.:
@@ -482,9 +497,10 @@ def evaluate_logic_rule(rule_row, text_lower):
       Include: (blank)          Exclude: HS:- ZERO, ECO PASS  -> both absent
     All Include terms must be present; all Exclude terms must be absent.
     """
-    includes = [t.strip().lower() for t in str(rule_row.get('Include', '')).split(',') if t.strip()]
-    excludes = [t.strip().lower() for t in str(rule_row.get('Exclude', '')).split(',') if t.strip()]
-    return all(t in text_lower for t in includes) and all(t not in text_lower for t in excludes)
+    includes = [t.strip() for t in str(_get_field_ci(rule_row, 'Include')).split(',') if t.strip()]
+    excludes = [t.strip() for t in str(_get_field_ci(rule_row, 'Exclude')).split(',') if t.strip()]
+    return (all(contains_normalized(text_lower, t) for t in includes)
+            and all(not contains_normalized(text_lower, t) for t in excludes))
 
 
 def extract_lhg_code(block_text):
@@ -506,7 +522,7 @@ def evaluate_rule(rule_row, block_text_lower, resolved_so_far, glass_type_lookup
     match_value = str(rule_row['Match Value']).strip()
 
     if match_type == 'text':
-        return match_value.lower() in block_text_lower
+        return contains_normalized(block_text_lower, match_value)
     if match_type == 'table':
         # Glass Type: look up the window's LHG code in the glass sheet's
         # column G (DG/TG/VT/VP) rather than searching quote text directly.
