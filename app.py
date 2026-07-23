@@ -489,12 +489,15 @@ def evaluate_logic_rule(rule_row, text_lower):
 
 def extract_lhg_code(block_text):
     """
-    Find the single LHG code within a window's raw (non-lowercased) block
-    text, e.g. from its 'Glass: ... LHG012 ...' line. Returns None if zero
-    or multiple codes are found (ambiguous either way).
+    Find the LHG code within a window's raw (non-lowercased) block text,
+    e.g. from its 'Glass: ... LHG012 ...' line. If multiple codes are
+    found on the line, just use the first one — good enough for looking
+    up Glass Type (DG/TG/VT/VP), even though it's ambiguous for the mass
+    calculator's own weight lookup (handled separately in Module 2).
+    Returns None only if zero codes are found at all.
     """
     matches = re.findall(r'LHG\d+', block_text)
-    return matches[0] if len(matches) == 1 else None
+    return matches[0] if matches else None
 
 
 def evaluate_rule(rule_row, block_text_lower, resolved_so_far, glass_type_lookup=None, lhg_code=None):
