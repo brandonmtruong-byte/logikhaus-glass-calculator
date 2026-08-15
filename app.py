@@ -9,7 +9,7 @@ from modules.steps import STEP_ORDER, STEP_LABELS, apply_logo, apply_mass, apply
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus Glass Calculator",
+    page_title="Logikhaus PDFfixr",
     page_icon="🪟",
     layout="centered"
 )
