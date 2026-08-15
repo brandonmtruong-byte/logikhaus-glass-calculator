@@ -29,10 +29,10 @@ from .legend_page import append_legend_page
 STEP_ORDER = ['logo', 'mass', 'frame', 'legend']
 
 STEP_LABELS = {
-    'logo':   'Add Logo',
-    'mass':   'Calculate Glass Weights',
-    'frame':  'Add LHF Codes',
-    'legend': 'Add Legend',
+    'logo':   'Logo',
+    'mass':   'Glass Weight Calculator',
+    'frame':  'LHF Code Matcher',
+    'legend': 'Legend',
 }
 
 
