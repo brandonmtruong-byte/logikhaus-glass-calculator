@@ -22,7 +22,7 @@ try:
     with st.spinner('Loading glass data from sheet...'):
         glass_lookup      = load_glass_lookup()
         glass_type_lookup = load_glass_type_lookup()
-    st.markdown(f'<div class="status-box">✓ Glass database loaded — {len(glass_lookup)} codes</div>',
+    st.markdown(f'<div class="status-box">✓ Glass database loaded - {len(glass_lookup)} codes</div>',
                 unsafe_allow_html=True)
 except Exception as e:
     st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
@@ -36,7 +36,7 @@ try:
         frame_codes = load_frame_codes()
         frame_rules = load_frame_rules()
     st.markdown(
-        f'<div class="status-box">✓ Frame code data loaded — '
+        f'<div class="status-box">✓ Frame code data loaded - '
         f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
         unsafe_allow_html=True
     )
@@ -155,7 +155,7 @@ for i, step_key in enumerate(STEP_ORDER):
     # Already-passed step: collapsed one-line summary
     if i < st.session_state.current_step:
         icon = "✓" if status == 'applied' else "⏭"
-        st.markdown(f"**{icon} Step {i + 1}: {label}** — {status}")
+        st.markdown(f"**{icon} Step {i + 1}: {label}** - {status}")
         continue
 
     # Not-yet-reached step: locked placeholder
