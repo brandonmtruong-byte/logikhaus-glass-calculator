@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import fitz
@@ -5,11 +6,15 @@ import fitz
 from modules.styles import inject_css, render_header
 from modules.glass_weight import load_glass_lookup, load_glass_type_lookup
 from modules.frame_code_data import load_frame_codes, load_frame_rules
-from modules.steps import STEP_ORDER, STEP_LABELS, apply_logo, apply_mass, apply_frame, apply_legend
+from modules.config import TEMPLATE_XLSX_PATH
+from modules.steps import (
+    STEP_ORDER, STEP_LABELS,
+    apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
+)
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDFfixr",
+    page_title="Logikhaus Glass Calculator",
     page_icon="🪟",
     layout="centered"
 )
@@ -22,7 +27,7 @@ try:
     with st.spinner('Loading glass data from sheet...'):
         glass_lookup      = load_glass_lookup()
         glass_type_lookup = load_glass_type_lookup()
-    st.markdown(f'<div class="status-box">✓ Glass database loaded - {len(glass_lookup)} codes</div>',
+    st.markdown(f'<div class="status-box">✓ Glass database loaded — {len(glass_lookup)} codes</div>',
                 unsafe_allow_html=True)
 except Exception as e:
     st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
@@ -36,7 +41,7 @@ try:
         frame_codes = load_frame_codes()
         frame_rules = load_frame_rules()
     st.markdown(
-        f'<div class="status-box">✓ Frame code data loaded - '
+        f'<div class="status-box">✓ Frame code data loaded — '
         f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
         unsafe_allow_html=True
     )
@@ -101,6 +106,32 @@ def render_frame_preview(rows):
             st.code(r.get('Block Text', ''), language=None)
 
 
+def render_text_replace_preview(result):
+    st.markdown(
+        f'<div class="status-box">✓ {result["replaced"]} replacement(s), '
+        f'{result["deleted"]} deletion(s), across page(s) '
+        f'{result["pages"] if result["pages"] else "none"}</div>',
+        unsafe_allow_html=True
+    )
+
+    if result["not_found_warnings"]:
+        st.warning("Some instructions may need a closer look — either they "
+                   "didn't match anything, or they matched some but missed a similar variant:")
+        for w in result["not_found_warnings"]:
+            st.write(f"- {w}")
+
+    if result["overlap_warnings"]:
+        st.warning("Possible text overlap detected — review these pages before continuing:")
+        for pno, page_warnings in result["overlap_warnings"].items():
+            for w in page_warnings:
+                st.write(f"- Page {pno}: {w}")
+
+    if result["preview_images"]:
+        with st.expander(f"Preview of {len(result['preview_images'])} changed page(s)", expanded=True):
+            for pno in sorted(result["preview_images"]):
+                st.image(result["preview_images"][pno], caption=f"Page {pno}", use_container_width=True)
+
+
 def render_legend_preview(status):
     if status == 'added':
         st.markdown('<div class="status-box">✓ Legend page appended to end of quote</div>', unsafe_allow_html=True)
@@ -155,7 +186,7 @@ for i, step_key in enumerate(STEP_ORDER):
     # Already-passed step: collapsed one-line summary
     if i < st.session_state.current_step:
         icon = "✓" if status == 'applied' else "⏭"
-        st.markdown(f"**{icon} Step {i + 1}: {label}** - {status}")
+        st.markdown(f"**{icon} Step {i + 1}: {label}** — {status}")
         continue
 
     # Not-yet-reached step: locked placeholder
@@ -172,11 +203,30 @@ for i, step_key in enumerate(STEP_ORDER):
         if frame_data_missing:
             st.warning("Frame code sheet isn't available — this step can only be skipped.")
 
+        # Text replace step needs its own instructions .xlsx uploaded first
+        text_replace_xlsx = None
+        if step_key == 'text_replace':
+            if os.path.exists(TEMPLATE_XLSX_PATH):
+                with open(TEMPLATE_XLSX_PATH, "rb") as f:
+                    st.download_button(
+                        "Download blank instructions template (.xlsx)",
+                        data=f.read(),
+                        file_name="template_instructions.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"template_download_{step_key}",
+                    )
+            text_replace_xlsx = st.file_uploader(
+                "Instructions spreadsheet (.xlsx)", type="xlsx", key=f"xlsx_upload_{step_key}"
+            )
+
+        text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
+        apply_disabled = frame_data_missing or text_replace_missing
+
         col_apply, col_skip = st.columns([3, 1])
         with col_apply:
             apply_clicked = st.button(
                 f"Apply {label}", key=f"apply_{step_key}",
-                use_container_width=True, disabled=frame_data_missing,
+                use_container_width=True, disabled=apply_disabled,
             )
         with col_skip:
             skip_clicked = st.button("Skip", key=f"skip_{step_key}", use_container_width=True)
@@ -186,6 +236,10 @@ for i, step_key in enumerate(STEP_ORDER):
                 if step_key == 'logo':
                     apply_logo(doc)
                     st.session_state.step_results[step_key] = None
+                elif step_key == 'text_replace':
+                    result = apply_text_replace(doc, text_replace_xlsx.getvalue())
+                    st.session_state.doc = result.pop('doc')
+                    st.session_state.step_results[step_key] = result
                 elif step_key == 'mass':
                     st.session_state.step_results[step_key] = apply_mass(doc, glass_lookup)
                 elif step_key == 'frame':
@@ -208,6 +262,8 @@ for i, step_key in enumerate(STEP_ORDER):
         if step_key == 'logo':
             pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
             st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
+        elif step_key == 'text_replace':
+            render_text_replace_preview(result)
         elif step_key == 'mass':
             render_mass_preview(result)
         elif step_key == 'frame':

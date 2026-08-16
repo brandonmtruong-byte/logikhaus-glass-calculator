@@ -25,14 +25,16 @@ from .logo_stamper import stamp_logo
 from .glass_weight import process_glass_weights
 from .frame_code_matcher import process_frame_codes, group_rules_by_category
 from .legend_page import append_legend_page
+from .schedule_editor import apply_text_replace
 
-STEP_ORDER = ['logo', 'mass', 'frame', 'legend']
+STEP_ORDER = ['logo', 'text_replace', 'mass', 'frame', 'legend']
 
 STEP_LABELS = {
-    'logo':   'Logo',
-    'mass':   'Glass Weight Calculator',
-    'frame':  'LHF Code Matcher',
-    'legend': 'Legend',
+    'logo':         'Logo Stamp',
+    'text_replace': 'Schedule Text Editor',
+    'mass':         'Glass Weight Calculator',
+    'frame':        'Frame Code Matcher',
+    'legend':       'Legend Page',
 }
 
 
