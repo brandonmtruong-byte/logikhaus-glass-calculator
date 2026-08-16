@@ -1,5 +1,6 @@
-streamlit
-pymupdf
 gspread
 google-auth
 pandas
+PyMuPDF>=1.24.0
+openpyxl>=3.1.0
+streamlit>=1.35.0
