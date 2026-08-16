@@ -30,6 +30,9 @@ LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 FRAME_SHEET_ID  = '1Ieyvx0ZgSBToQFCDGXM8d8xK3zaxqKnXmLdK8ir79n4'
 FRAME_RULES_TAB = 'RULESUPDATE'
 
+# ── Schedule text editor (Step 2 — vendored from jennynt-LGH/Schedule-Editor) ─
+TEMPLATE_XLSX_PATH = os.path.join(BASE_DIR, "template_instructions.xlsx")
+
 # Google Sheets API scopes used by every module that reads a sheet.
 GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
