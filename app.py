@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import fitz
 
-from modules.styles import inject_css, render_header
+from modules.styles import inject_css, render_header, render_eyebrow, render_step_row, render_active_step_header
 from modules.glass_weight import load_glass_lookup, load_glass_type_lookup
 from modules.frame_code_data import load_frame_codes, load_frame_rules
 from modules.config import TEMPLATE_XLSX_PATH
@@ -143,7 +143,7 @@ def render_legend_preview(status):
 
 
 # ── File upload ──────────────────────────────────────────────────────────
-st.markdown("### Upload schedule")
+render_eyebrow("Upload schedule")
 uploaded = st.file_uploader(
     "Drop a Logikhaus PDF schedule here",
     type="pdf",
@@ -170,9 +170,9 @@ st.markdown("---")
 
 col_title, col_reset = st.columns([4, 1])
 with col_title:
-    st.markdown("### Processing steps")
+    render_eyebrow("Processing steps")
 with col_reset:
-    if st.button("Start Over", use_container_width=True):
+    if st.button("Start Over", use_container_width=True, type="secondary"):
         doc.close()
         for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results']:
             st.session_state.pop(key, None)
@@ -183,103 +183,103 @@ for i, step_key in enumerate(STEP_ORDER):
     label  = STEP_LABELS[step_key]
     status = st.session_state.step_status[step_key]
 
-    # Already-passed step: collapsed one-line summary
+    # Already-passed step: collapsed one-line summary (✓ applied / ⏭ skipped)
     if i < st.session_state.current_step:
-        icon = "✓" if status == 'applied' else "⏭"
-        st.markdown(f"**{icon} Step {i + 1}: {label}** — {status}")
+        render_step_row(i + 1, label, status)
         continue
 
     # Not-yet-reached step: locked placeholder
     if i > st.session_state.current_step:
-        st.markdown(f"<span style='color:#bbb'>Step {i + 1}: {label} — locked</span>", unsafe_allow_html=True)
+        render_step_row(i + 1, label, 'locked')
         continue
 
-    # ── The current active step ─────────────────────────────────────────
-    st.markdown(f"#### Step {i + 1} of {len(STEP_ORDER)}: {label}")
+    # ── The current active step — highlighted bordered container ─────────
+    with st.container(border=True, key="active_step"):
+        render_active_step_header(i + 1, len(STEP_ORDER), label)
 
-    if status == 'pending':
-        # Frame step needs sheet data to be available at all
-        frame_data_missing = step_key == 'frame' and (frame_codes is None or frame_rules is None)
-        if frame_data_missing:
-            st.warning("Frame code sheet isn't available — this step can only be skipped.")
+        if status == 'pending':
+            # Frame step needs sheet data to be available at all
+            frame_data_missing = step_key == 'frame' and (frame_codes is None or frame_rules is None)
+            if frame_data_missing:
+                st.warning("Frame code sheet isn't available — this step can only be skipped.")
 
-        # Text replace step needs its own instructions .xlsx uploaded first
-        text_replace_xlsx = None
-        if step_key == 'text_replace':
-            if os.path.exists(TEMPLATE_XLSX_PATH):
-                with open(TEMPLATE_XLSX_PATH, "rb") as f:
-                    st.download_button(
-                        "Download blank instructions template (.xlsx)",
-                        data=f.read(),
-                        file_name="template_instructions.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"template_download_{step_key}",
-                    )
-            text_replace_xlsx = st.file_uploader(
-                "Instructions spreadsheet (.xlsx)", type="xlsx", key=f"xlsx_upload_{step_key}"
-            )
+            # Text replace step needs its own instructions .xlsx uploaded first
+            text_replace_xlsx = None
+            if step_key == 'text_replace':
+                if os.path.exists(TEMPLATE_XLSX_PATH):
+                    with open(TEMPLATE_XLSX_PATH, "rb") as f:
+                        st.download_button(
+                            "Download blank instructions template (.xlsx)",
+                            data=f.read(),
+                            file_name="template_instructions.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"template_download_{step_key}",
+                        )
+                text_replace_xlsx = st.file_uploader(
+                    "Instructions spreadsheet (.xlsx)", type="xlsx", key=f"xlsx_upload_{step_key}"
+                )
 
-        text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
-        apply_disabled = frame_data_missing or text_replace_missing
+            text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
+            apply_disabled = frame_data_missing or text_replace_missing
 
-        col_apply, col_skip = st.columns([3, 1])
-        with col_apply:
-            apply_clicked = st.button(
-                f"Apply {label}", key=f"apply_{step_key}",
-                use_container_width=True, disabled=apply_disabled,
-            )
-        with col_skip:
-            skip_clicked = st.button("Skip", key=f"skip_{step_key}", use_container_width=True)
+            col_apply, col_skip = st.columns([3, 1])
+            with col_apply:
+                apply_clicked = st.button(
+                    f"Apply {label}", key=f"apply_{step_key}",
+                    use_container_width=True, disabled=apply_disabled, type="primary",
+                )
+            with col_skip:
+                skip_clicked = st.button(
+                    "Skip", key=f"skip_{step_key}", use_container_width=True, type="secondary",
+                )
 
-        if apply_clicked:
-            with st.spinner(f'Applying {label}...'):
-                if step_key == 'logo':
-                    apply_logo(doc)
-                    st.session_state.step_results[step_key] = None
-                elif step_key == 'text_replace':
-                    result = apply_text_replace(doc, text_replace_xlsx.getvalue())
-                    st.session_state.doc = result.pop('doc')
-                    st.session_state.step_results[step_key] = result
-                elif step_key == 'mass':
-                    st.session_state.step_results[step_key] = apply_mass(doc, glass_lookup)
-                elif step_key == 'frame':
-                    st.session_state.step_results[step_key] = apply_frame(
-                        doc, frame_codes, frame_rules, glass_type_lookup
-                    )
-                elif step_key == 'legend':
-                    st.session_state.step_results[step_key] = apply_legend(doc)
-            st.session_state.step_status[step_key] = 'applied'
-            st.rerun()
+            if apply_clicked:
+                with st.spinner(f'Applying {label}...'):
+                    if step_key == 'logo':
+                        apply_logo(doc)
+                        st.session_state.step_results[step_key] = None
+                    elif step_key == 'text_replace':
+                        result = apply_text_replace(doc, text_replace_xlsx.getvalue())
+                        st.session_state.doc = result.pop('doc')
+                        st.session_state.step_results[step_key] = result
+                    elif step_key == 'mass':
+                        st.session_state.step_results[step_key] = apply_mass(doc, glass_lookup)
+                    elif step_key == 'frame':
+                        st.session_state.step_results[step_key] = apply_frame(
+                            doc, frame_codes, frame_rules, glass_type_lookup
+                        )
+                    elif step_key == 'legend':
+                        st.session_state.step_results[step_key] = apply_legend(doc)
+                st.session_state.step_status[step_key] = 'applied'
+                st.rerun()
 
-        if skip_clicked:
-            st.session_state.step_status[step_key] = 'skipped'
-            st.session_state.current_step += 1
-            st.rerun()
+            if skip_clicked:
+                st.session_state.step_status[step_key] = 'skipped'
+                st.session_state.current_step += 1
+                st.rerun()
 
-    elif status == 'applied':
-        result = st.session_state.step_results.get(step_key)
+        elif status == 'applied':
+            result = st.session_state.step_results.get(step_key)
 
-        if step_key == 'logo':
-            pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
-            st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
-        elif step_key == 'text_replace':
-            render_text_replace_preview(result)
-        elif step_key == 'mass':
-            render_mass_preview(result)
-        elif step_key == 'frame':
-            render_frame_preview(result)
-        elif step_key == 'legend':
-            render_legend_preview(result)
+            if step_key == 'logo':
+                pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
+                st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
+            elif step_key == 'text_replace':
+                render_text_replace_preview(result)
+            elif step_key == 'mass':
+                render_mass_preview(result)
+            elif step_key == 'frame':
+                render_frame_preview(result)
+            elif step_key == 'legend':
+                render_legend_preview(result)
 
-        if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True):
-            st.session_state.current_step += 1
-            st.rerun()
-
-    st.markdown("---")
+            if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True, type="primary"):
+                st.session_state.current_step += 1
+                st.rerun()
 
 # ── All steps done: download ────────────────────────────────────────────
 if st.session_state.current_step >= len(STEP_ORDER):
-    st.markdown("### All steps complete")
+    render_eyebrow("All steps complete")
     out_bytes = doc.tobytes()
     out_name  = st.session_state.file_name.replace('.pdf', '_processed.pdf')
     st.download_button(
