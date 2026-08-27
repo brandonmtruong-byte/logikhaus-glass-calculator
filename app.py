@@ -100,7 +100,7 @@ def render_frame_preview(rows):
     if error_count:
         st.warning(f'{error_count} window(s) could not be matched to a frame code — see Details below.')
 
-    with st.expander("Debug: raw block text per window"):
+    if st.toggle("Show raw block text per window", value=False, key="frame_show_debug"):
         for r in rows:
             st.write(f"**{r['Window']}** ({r['Frame Code']})")
             st.code(r.get('Block Text', ''), language=None)
@@ -127,7 +127,11 @@ def render_text_replace_preview(result):
                 st.write(f"- Page {pno}: {w}")
 
     if result["preview_images"]:
-        with st.expander(f"Preview of {len(result['preview_images'])} changed page(s)", expanded=True):
+        show_images = st.toggle(
+            f"Show preview of {len(result['preview_images'])} changed page(s)",
+            value=False, key="text_replace_show_images"
+        )
+        if show_images:
             for pno in sorted(result["preview_images"]):
                 st.image(result["preview_images"][pno], caption=f"Page {pno}", use_container_width=True)
 
@@ -261,17 +265,20 @@ for i, step_key in enumerate(STEP_ORDER):
         elif status == 'applied':
             result = st.session_state.step_results.get(step_key)
 
-            if step_key == 'logo':
-                pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
-                st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
-            elif step_key == 'text_replace':
-                render_text_replace_preview(result)
-            elif step_key == 'mass':
-                render_mass_preview(result)
-            elif step_key == 'frame':
-                render_frame_preview(result)
-            elif step_key == 'legend':
-                render_legend_preview(result)
+            st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
+
+            with st.expander("View details", expanded=False):
+                if step_key == 'logo':
+                    pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
+                    st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
+                elif step_key == 'text_replace':
+                    render_text_replace_preview(result)
+                elif step_key == 'mass':
+                    render_mass_preview(result)
+                elif step_key == 'frame':
+                    render_frame_preview(result)
+                elif step_key == 'legend':
+                    render_legend_preview(result)
 
             if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True, type="primary"):
                 st.session_state.current_step += 1
