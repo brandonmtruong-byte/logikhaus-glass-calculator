@@ -22,12 +22,12 @@ st.set_page_config(
 inject_css()
 render_header()
 
-# ── Load reference data (Google Sheets — independent of any uploaded PDF) ──
+# ── Load reference data (Google Sheets - independent of any uploaded PDF) ──
 try:
     with st.spinner('Loading glass data from sheet...'):
         glass_lookup      = load_glass_lookup()
         glass_type_lookup = load_glass_type_lookup()
-    st.markdown(f'<div class="status-box">✓ Glass database loaded — {len(glass_lookup)} codes</div>',
+    st.markdown(f'<div class="status-box">✓ Glass database loaded- {len(glass_lookup)} codes</div>',
                 unsafe_allow_html=True)
 except Exception as e:
     st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
@@ -41,12 +41,12 @@ try:
         frame_codes = load_frame_codes()
         frame_rules = load_frame_rules()
     st.markdown(
-        f'<div class="status-box">✓ Frame code data loaded — '
+        f'<div class="status-box">✓ Frame code data loaded- '
         f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
         unsafe_allow_html=True
     )
 except Exception as e:
-    st.warning(f'Could not load frame code sheet — the Frame Code Matcher step will be skippable only. '
+    st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
                f'({type(e).__name__}: {e})')
 
 st.markdown("---")
@@ -98,7 +98,7 @@ def render_frame_preview(rows):
 
     error_count = sum(1 for r in rows if r['Frame Code'] == 'ERROR')
     if error_count:
-        st.warning(f'{error_count} window(s) could not be matched to a frame code — see Details below.')
+        st.warning(f'{error_count} window(s) could not be matched to a frame code- see Details below.')
 
     if st.toggle("Show raw block text per window", value=False, key="frame_show_debug"):
         for r in rows:
@@ -115,13 +115,13 @@ def render_text_replace_preview(result):
     )
 
     if result["not_found_warnings"]:
-        st.warning("Some instructions may need a closer look — either they "
+        st.warning("Some instructions may need a closer look- either they "
                    "didn't match anything, or they matched some but missed a similar variant:")
         for w in result["not_found_warnings"]:
             st.write(f"- {w}")
 
     if result["overlap_warnings"]:
-        st.warning("Possible text overlap detected — review these pages before continuing:")
+        st.warning("Possible text overlap detected- review these pages before continuing:")
         for pno, page_warnings in result["overlap_warnings"].items():
             for w in page_warnings:
                 st.write(f"- Page {pno}: {w}")
@@ -140,10 +140,10 @@ def render_legend_preview(status):
     if status == 'added':
         st.markdown('<div class="status-box">✓ Legend page appended to end of quote</div>', unsafe_allow_html=True)
     elif status == 'already_present':
-        st.markdown('<div class="status-box">Legend page already present — not duplicated</div>',
+        st.markdown('<div class="status-box">Legend page already present- not duplicated</div>',
                      unsafe_allow_html=True)
     elif status == 'missing_file':
-        st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder — legend page was not added.')
+        st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder- legend page was not added.')
 
 
 # ── File upload ──────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ for i, step_key in enumerate(STEP_ORDER):
         render_step_row(i + 1, label, 'locked')
         continue
 
-    # ── The current active step — highlighted bordered container ─────────
+    # ── The current active step- highlighted bordered container ─────────
     with st.container(border=True, key="active_step"):
         render_active_step_header(i + 1, len(STEP_ORDER), label)
 
@@ -205,7 +205,7 @@ for i, step_key in enumerate(STEP_ORDER):
             # Frame step needs sheet data to be available at all
             frame_data_missing = step_key == 'frame' and (frame_codes is None or frame_rules is None)
             if frame_data_missing:
-                st.warning("Frame code sheet isn't available — this step can only be skipped.")
+                st.warning("Frame code sheet isn't available- this step can only be skipped.")
 
             # Text replace step needs its own instructions .xlsx uploaded first
             text_replace_xlsx = None

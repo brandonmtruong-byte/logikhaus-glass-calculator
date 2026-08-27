@@ -49,14 +49,14 @@ CUSTOM_CSS = """
     }
 
     /* ══════════════════════════════════════════════════════════════════
-       STEPPER — clear visual hierarchy for the processing steps flow.
+       STEPPER - clear visual hierarchy for the processing steps flow.
        Uses !important throughout: Streamlit's own theme CSS frequently
        out-specifies plain element/class selectors (this is very likely
        why the old "### Processing steps" h3 rule wasn't visibly taking
        effect), so these rules are written to win regardless.
        ══════════════════════════════════════════════════════════════════ */
 
-    /* Section label — sits ABOVE the step list, smallest/quietest text
+    /* Section label - sits ABOVE the step list, smallest/quietest text
        on the page so it never competes with the active step's title. */
     .lh-eyebrow {
         font-size: 0.75rem !important;
@@ -68,7 +68,7 @@ CUSTOM_CSS = """
     }
 
     /* One row per already-passed or not-yet-reached step. Deliberately
-       small and low-contrast — these are reference info, not decisions. */
+       small and low-contrast - these are reference info, not decisions. */
     .lh-step-row {
         display: flex; align-items: center; gap: 10px;
         padding: 10px 2px; border-top: 1px solid rgba(255,255,255,0.08);
@@ -107,7 +107,7 @@ CUSTOM_CSS = """
     }
 
     /* Bordered container Streamlit draws around the active step
-       (st.container(border=True, key="active_step")) — recolor its
+       (st.container(border=True, key="active_step")) - recolor its
        default gray border to the brand accent so it visually reads
        as "you are here" before any text is read. */
     div[class*="st-key-active_step"] {
@@ -153,14 +153,14 @@ def render_header():
         st.markdown("""
         <div style="padding-top: 1rem;">
             <div class="lh-title">Glass Weight Calculator</div>
-            <div class="lh-sub">Logikhaus Pty Ltd — internal tool</div>
+            <div class="lh-sub">Logikhaus Pty Ltd - internal tool</div>
         </div>
         """, unsafe_allow_html=True)
     st.markdown('<hr style="border: 2px solid #A13336; margin-bottom: 2rem;">', unsafe_allow_html=True)
 
 
 def render_eyebrow(text):
-    """Small uppercase section label — used above the step list and file uploader."""
+    """Small uppercase section label - used above the step list and file uploader."""
     st.markdown(f'<div class="lh-eyebrow">{text}</div>', unsafe_allow_html=True)
 
 
@@ -170,7 +170,7 @@ def render_step_row(step_num, label, state):
     ('locked') step. state must be one of those three strings.
     """
     icon = {'applied': '✓', 'skipped': '⏭', 'locked': '🔒'}[state]
-    text = f"Step {step_num}: {label}" + ("" if state == 'locked' else f" — {state}")
+    text = f"Step {step_num}: {label}" + ("" if state == 'locked' else f" - {state}")
     st.markdown(
         f'<div class="lh-step-row lh-row-{state}">'
         f'<span class="lh-step-icon">{icon}</span><span>{text}</span></div>',
