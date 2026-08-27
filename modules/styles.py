@@ -77,13 +77,13 @@ CUSTOM_CSS = """
     .lh-step-icon { font-size: 0.95rem; width: 18px; text-align: center; flex-shrink: 0; }
 
     .lh-row-applied { color: #9a9da5 !important; }
-    .lh-row-applied .lh-step-icon { color: #4caf82 !important; }   /* done = green */
+    .lh-row-applied .lh-step-icon { color: #7FB89A !important; }   /* soft sage green */
 
     .lh-row-skipped { color: #9a9da5 !important; }
-    .lh-row-skipped .lh-step-icon { color: #e0a030 !important; }   /* skipped = amber, distinct from done */
+    .lh-row-skipped .lh-step-icon { color: #D9A45E !important; }   /* muted warm amber */
 
     .lh-row-locked { color: #5a5d65 !important; }
-    .lh-row-locked .lh-step-icon { color: #454850 !important; }    /* locked = dimmest */
+    .lh-row-locked .lh-step-icon  { color: #5A5D65 !important; }    /* locked = dimmest */
 
     /* Active step header: number badge + title + "step N of M" counter,
        the single most prominent text block on the page. */
