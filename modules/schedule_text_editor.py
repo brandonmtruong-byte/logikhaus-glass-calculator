@@ -558,6 +558,12 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
     delete_resolved = [parse_delete_phrase(p["phrase"]) for p in delete_phrases]
     near_miss = {}  # rule_idx -> {variant_text: set(page_num, ...)}
 
+    # LOCAL CHANGE: track each page's edited regions (same rects used for
+    # the white cover-up) so the preview render below can highlight them.
+    # Purely additive -- never touches output_pdf, only the separate
+    # preview_doc copy opened after saving.
+    page_highlight_rects = {}
+
     for pno in range(len(doc)):
         page = doc[pno]
         page_num = pno + 1
@@ -752,6 +758,10 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
 
         resolve_line_overlaps(insert_jobs, cover_rects)
 
+        # LOCAL CHANGE: snapshot this page's finalized edit regions before
+        # cover_rects gets reset at the top of the next page's iteration.
+        page_highlight_rects[page_num] = list(cover_rects)
+
         # Non-destructive white overlay (rather than true redaction) --
         # redacting text can corrupt shared embedded font glyphs elsewhere
         # on the same page. The tradeoff: old text is visually hidden but
@@ -786,7 +796,15 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         os.makedirs(preview_dir, exist_ok=True)
         preview_doc = fitz.open(output_pdf)
         for pno in sorted(modified_pages):
-            preview_doc[pno - 1].get_pixmap(dpi=150).save(
+            preview_page = preview_doc[pno - 1]
+            # LOCAL CHANGE: highlight every edited region on the preview
+            # only -- output_pdf was already saved above, untouched.
+            for rect in page_highlight_rects.get(pno, []):
+                preview_page.draw_rect(
+                    rect, color=(0.85, 0.55, 0), width=1.2,
+                    fill=(1, 0.92, 0.55), fill_opacity=0.45, overlay=True
+                )
+            preview_page.get_pixmap(dpi=150).save(
                 os.path.join(preview_dir, f"page{pno}_preview.png"))
 
     # Flag any rule/phrase that never matched anywhere in the document --
