@@ -19,24 +19,24 @@ CUSTOM_CSS = """
 
     .lh-header {
         display: flex; align-items: center; gap: 14px;
-        border-bottom: 2px solid #8B1A1A; padding-bottom: 1rem; margin-bottom: 2rem;
+        border-bottom: 2px solid #A13336; padding-bottom: 1rem; margin-bottom: 2rem;
     }
     .lh-logo {
-        background: #8B1A1A; color: white; font-weight: 700;
+        background: #A13336; color: white; font-weight: 700;
         font-size: 0.75rem; padding: 6px 10px; letter-spacing: 0.05em;
     }
     .lh-title { font-size: 1.25rem; font-weight: 600; color: #111; }
     .lh-sub   { font-size: 0.8rem; color: #888; margin-top: 2px; }
 
     .status-box {
-        background: #f7f7f5; border-left: 3px solid #8B1A1A;
+        background: #f7f7f5; border-left: 3px solid #A13336;
         padding: 0.75rem 1rem; border-radius: 0 4px 4px 0;
         font-size: 0.85rem; color: #333; margin-bottom: 1rem;
     }
     .skip-row { color: #aaa; font-style: italic; }
 
     div[data-testid="stDownloadButton"] button {
-        background: #8B1A1A; color: white; border: none;
+        background: #A13336; color: white; border: none;
         font-weight: 500; width: 100%;
     }
     div[data-testid="stDownloadButton"] button:hover { background: #6e1414; }
@@ -92,7 +92,7 @@ CUSTOM_CSS = """
     }
     .lh-badge {
         width: 26px; height: 26px; border-radius: 50%;
-        background: #8B1A1A; color: #fff !important;
+        background: #A13336; color: #fff !important;
         font-size: 0.8rem !important; font-weight: 600 !important;
         display: flex; align-items: center; justify-content: center;
         flex-shrink: 0;
@@ -111,7 +111,7 @@ CUSTOM_CSS = """
        default gray border to the brand accent so it visually reads
        as "you are here" before any text is read. */
     div[class*="st-key-active_step"] {
-        border-color: #8B1A1A !important;
+        border-color: #A13336 !important;
         background: rgba(139, 26, 26, 0.05) !important;
         border-radius: 8px !important;
     }
@@ -119,7 +119,7 @@ CUSTOM_CSS = """
     /* Apply / Continue = primary brand action. Skip / Start Over =
        secondary, quieter, so the eye lands on the primary button first. */
     div[data-testid="stButton"] button[kind="primary"] {
-        background: #8B1A1A !important; color: #fff !important;
+        background: #A13336 !important; color: #fff !important;
         border: none !important; font-weight: 500 !important;
     }
     div[data-testid="stButton"] button[kind="primary"]:hover {
@@ -155,7 +155,7 @@ def render_header():
             <div class="lh-sub">Logikhaus Pty Ltd — internal tool</div>
         </div>
         """, unsafe_allow_html=True)
-    st.markdown('<hr style="border: 2px solid #8B1A1A; margin-bottom: 2rem;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border: 2px solid #A13336; margin-bottom: 2rem;">', unsafe_allow_html=True)
 
 
 def render_eyebrow(text):
