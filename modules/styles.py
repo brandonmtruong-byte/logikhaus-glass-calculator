@@ -112,6 +112,7 @@ CUSTOM_CSS = """
        as "you are here" before any text is read. */
     div[class*="st-key-active_step"] {
         border-color: #A13336 !important;
+        border-width: 2px !important;
         background: rgba(139, 26, 26, 0.05) !important;
         border-radius: 8px !important;
     }
