@@ -8,26 +8,28 @@ original font style, size, and position.
 
 Instructions file format (first sheet):
 
-    Table 1 (a row containing the header "Replace from this" starts it):
-        Replace from this | to this | Only here | Skip this (don't apply to these) | Font size of new text | (anything else, ignored)
-        <old text>         | <new>   | Pos no. 12 | page 9          | 12.08
-        ...
-        (a blank row ends the table)
+Table 1 (a row containing the header "Replace from this" starts it):
 
-    Table 2 (a row containing "Delete these words from PDF" starts it),
-    which optionally takes the SAME "Only here" / "Skip this" columns:
-        Delete these words from PDF | Only here | Skip this (don't apply to these)
-        <word or phrase to delete>   | Pos no. 3  |
-        the whole line of "<text>"   |            | page 9
-        ...
-        (a blank row ends the table)
+    Replace from this | to this | Only here | Skip this (don't apply to these) | Font size of new text | (anything else, ignored)
+    <old text>         | <new>   | Pos no. 12| page 9                           | 12.08
+    ...
+    (a blank row ends the table)
+
+Table 2 (a row containing "Delete these words from PDF" starts it),
+which optionally takes the SAME "Only here" / "Skip this" columns:
+
+    Delete these words from PDF | Only here | Skip this (don't apply to these)
+    <word or phrase to delete>  | Pos no. 3 |
+    the whole line of "<text>"  |           | page 9
+    ...
+    (a blank row ends the table)
 
 A delete row's phrase can either be:
-    - a literal word/phrase that appears in the PDF -- only that text is
-      removed, or
-    - "the whole line of "<text>"" -- finds <text> in the PDF, then
-      removes the ENTIRE line it's on (useful for removing a whole
-      "U-value (W/m2K)= 1.39" style line by only naming part of it).
+  - a literal word/phrase that appears in the PDF -- only that text is
+    removed, or
+  - "the whole line of "<text>"" -- finds <text> in the PDF, then
+    removes the ENTIRE line it's on (useful for removing a whole
+    "U-value (W/m2K)= 1.39" style line by only naming part of it).
 
 "Only here" and "Skip this (don't apply to these)" both accept the same
 kind of value in either table: blank, "-", a page number/numbers ("page
@@ -36,25 +38,25 @@ Whether a cell means pages or POS numbers is decided by whether the word
 "pos" appears in it anywhere (any spacing/punctuation/case: "POS 12",
 "pos.no 12", "POS #12" all count) -- otherwise the numbers in it are
 treated as page numbers.
-    - "Only here": the rule applies ONLY at the listed page(s)/POS
-      number(s), and is skipped everywhere else in the document.
-    - "Skip this (don't apply to these)": the rule applies everywhere
-      EXCEPT the listed page(s)/POS number(s) (this column has also been
-      called "Exception" / "Except for this" in older sheets -- all three
-      headers are recognized).
+  - "Only here": the rule applies ONLY at the listed page(s)/POS
+    number(s), and is skipped everywhere else in the document.
+  - "Skip this (don't apply to these)": the rule applies everywhere
+    EXCEPT the listed page(s)/POS number(s) (this column has also been
+    called "Exception" / "Except for this" in older sheets -- all three
+    headers are recognized).
 A POS number refers to the "Pos.no N:" label the PDF itself prints next
 to each item -- not a spreadsheet row number.
 
 Anything that is NOT part of the two tables above is ignored by design,
 so the spreadsheet can carry human-readable notes without confusing the
 parser. Concretely:
-    - Any row(s) above the "Replace from this" header row (e.g. a title,
-      or a "Guide for users" row explaining how to fill the sheet in) are
-      skipped, since scanning only starts once that exact header is found.
-    - Each table ends at its first fully blank row. Anything below that
-      blank row -- e.g. a closing reminder like "Before finalising, add a
-      visual check of the whole page..." -- is never read as data, even
-      if it's in the same column as the delete-phrase list above it.
+  - Any row(s) above the "Replace from this" header row (e.g. a title,
+    or a "Guide for users" row explaining how to fill the sheet in) are
+    skipped, since scanning only starts once that exact header is found.
+  - Each table ends at its first fully blank row. Anything below that
+    blank row -- e.g. a closing reminder like "Before finalising, add a
+    visual check of the whole page..." -- is never read as data, even
+    if it's in the same column as the delete-phrase list above it.
 This means notes/instructions meant for a *person* filling in the sheet
 (or for whoever reviews the finished PDF) can sit right in the sheet
 without needing to be removed before uploading it.
@@ -232,16 +234,58 @@ def parse_instructions(xlsx_path):
 # ---------------------------------------------------------------------------
 
 def get_spans(page):
+    """Extract every text span on the page, using PyMuPDF's "rawdict" mode
+    so each span carries its individual characters' bounding boxes (not
+    just the span's own overall bbox). This lets us locate a substring's
+    exact rectangle directly from the page's own extracted text, instead
+    of re-querying the page with page.search_for() -- which, empirically,
+    can occasionally fail to find text that unambiguously exists (this
+    surfaced on one particular summary line where search_for() silently
+    returned no match at all for a phrase clearly present in the page's
+    own text). Searching within the extracted text we already trust
+    removes that failure mode entirely.
+    """
     spans = []
-    d = page.get_text("dict")
+    d = page.get_text("rawdict")
     for block in d["blocks"]:
+        if block.get("type") != 0:  # skip image blocks
+            continue
         for line in block.get("lines", []):
             line_bbox = line["bbox"]
             for span in line["spans"]:
                 span = dict(span)
                 span["line_bbox"] = line_bbox
+                chars = span.get("chars", [])
+                span["text"] = "".join(c["c"] for c in chars)
+                span["_chars"] = chars
                 spans.append(span)
     return spans
+
+
+def search_text_in_spans(spans, text):
+    """Find every exact, case-sensitive occurrence of `text` across all
+    spans on a page, returning a list of (fitz.Rect, span) pairs -- the
+    rect computed directly from the matched characters' own bounding
+    boxes. This is the replacement for page.search_for(text), used
+    throughout instead of it (see get_spans for why)."""
+    results = []
+    for span in spans:
+        span_text = span["text"]
+        chars = span["_chars"]
+        start = 0
+        while True:
+            idx = span_text.find(text, start)
+            if idx == -1:
+                break
+            matched = chars[idx: idx + len(text)]
+            if matched:
+                x0 = min(c["bbox"][0] for c in matched)
+                y0 = min(c["bbox"][1] for c in matched)
+                x1 = max(c["bbox"][2] for c in matched)
+                y1 = max(c["bbox"][3] for c in matched)
+                results.append((fitz.Rect(x0, y0, x1, y1), span))
+            start = idx + len(text)
+    return results
 
 
 _POS_LABEL_RE = re.compile(r"pos\.?\s*no\.?\s*(\d+)", re.IGNORECASE)
@@ -404,19 +448,6 @@ def find_overlap_warnings(page, inserted_specs, cover_rects):
     return warnings
 
 
-def _same_text_exact_case(extracted, expected):
-    """Case-sensitive equality that tolerates whitespace differences.
-    PyMuPDF's get_textbox() reconstructs spacing from glyph positions and
-    can occasionally introduce or drop a space compared to the literal
-    string a rule was typed with -- e.g. a slightly different inter-word
-    gap in one occurrence of an otherwise-identical phrase can make an
-    exact string comparison fail even though the actual letters (and
-    their case) match perfectly. Collapse runs of whitespace to a single
-    space on both sides before comparing so only real content differences
-    -- including case -- cause a mismatch."""
-    return " ".join(extracted.split()) == " ".join(expected.split())
-
-
 def _base14_for_style(name):
     """Pick a built-in base-14 font (full standard glyph coverage) that
     matches the bold/italic style implied by an original font's name."""
@@ -502,7 +533,6 @@ def resolve_line_overlaps(insert_jobs, cover_rects):
             cover.x1 = max(cover.x1, nxt["x"] + nxt_width + gap)
 
 
-
 def find_near_miss_texts(spans, old):
     """A replace rule only matches text that is EXACTLY the same as `old`.
     If the PDF has a slightly different version of that text nearby (an
@@ -584,18 +614,11 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 continue
             if rule["only_pages"] and page_num not in rule["only_pages"]:
                 continue
-            for rect in page.search_for(old):
-                # PyMuPDF's search_for() matches case-INSENSITIVELY by
-                # default, but these rules are documented (and promised in
-                # the instructions template) to be case-sensitive -- e.g. a
-                # rule for "AMSTERDAM F1" must not also catch "Amsterdam F1"
-                # elsewhere on the same line. Verify the actual text in this
-                # rect matches the rule's exact case before treating it as a
-                # real hit; a case-differing match is silently skipped here
-                # (not counted at all) so it doesn't inflate "not found"
-                # bookkeeping either.
-                if not _same_text_exact_case(page.get_textbox(rect), old):
-                    continue
+            for rect, span in search_text_in_spans(spans, old):
+                # search_text_in_spans() only ever returns exact,
+                # case-sensitive matches (it searches the literal
+                # extracted text directly) -- so no separate case check
+                # is needed here the way page.search_for() used to need.
                 raw_hit_counts[rule_idx] += 1
 
                 # POS-number-based gates -- these need the actual match
@@ -608,7 +631,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                         continue
 
                 applied_hit_counts[rule_idx] += 1
-                raw_hits.append({"rect": rect, "old": old, "new": new, "size": rule["size"]})
+                raw_hits.append({"rect": rect, "old": old, "new": new, "size": rule["size"], "span": span})
 
             for variant_text in find_near_miss_texts(spans, old):
                 near_miss.setdefault(rule_idx, {}).setdefault(variant_text, set()).add(page_num)
@@ -629,8 +652,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         hits_by_span = {}
         standalone_hits = []
         for hit in raw_hits:
-            span = find_containing_span(spans, hit["rect"])
-            hit["span"] = span
+            span = hit["span"]
             if span is None:
                 standalone_hits.append(hit)
             else:
@@ -713,10 +735,9 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             if phrase_rule["only_pages"] and page_num not in phrase_rule["only_pages"]:
                 continue
             search_text, whole_line = delete_resolved[phrase_idx]
-            for rect in page.search_for(search_text):
-                # Same case-sensitivity guard as the replace rules above.
-                if not _same_text_exact_case(page.get_textbox(rect), search_text):
-                    continue
+            for rect, span in search_text_in_spans(spans, search_text):
+                # search_text_in_spans() only returns exact, case-sensitive
+                # matches, so no separate case check is needed here.
                 raw_delete_hit_counts[phrase_idx] += 1
 
                 if phrase_rule["only_pos"] or phrase_rule["except_pos"]:
@@ -726,7 +747,6 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                     if phrase_rule["except_pos"] and pos_num in phrase_rule["except_pos"]:
                         continue
 
-                span = find_containing_span(spans, rect)
                 pad = 0.4
                 if whole_line and span is not None:
                     # The instruction said to remove the entire line this
@@ -762,12 +782,17 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         # cover_rects gets reset at the top of the next page's iteration.
         page_highlight_rects[page_num] = list(cover_rects)
 
-        # Non-destructive white overlay (rather than true redaction) --
-        # redacting text can corrupt shared embedded font glyphs elsewhere
-        # on the same page. The tradeoff: old text is visually hidden but
-        # technically still present/extractable underneath.
+        # True redaction: this removes the underlying text objects that
+        # intersect each cover rectangle from the page's content stream
+        # (not just painting over them), so a PDF viewer's search/copy no
+        # longer finds the old text underneath -- only a plain white box
+        # is left where it was, which we then draw the new text on top of.
+        # images=PDF_REDACT_IMAGE_NONE keeps this scoped to text only, so
+        # it can't affect the window/door diagrams even if a cover rect
+        # happens to sit close to one.
         for r in cover_rects:
-            page.draw_rect(r, color=None, fill=(1, 1, 1), fill_opacity=1, overlay=True)
+            page.add_redact_annot(r, fill=(1, 1, 1))
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
         for job in insert_jobs:
             x, y, text, fontkey, fontfile, size = (
@@ -831,6 +856,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                     f"so it didn't match. Add a separate row with this exact "
                     f"wording if it should change too."
                 )
+
     for phrase_idx, phrase_rule in enumerate(delete_phrases):
         if raw_delete_hit_counts[phrase_idx] == 0:
             search_text, whole_line = delete_resolved[phrase_idx]
@@ -865,6 +891,7 @@ if __name__ == "__main__":
                 print(f"    - {w}")
     else:
         print("No overlap issues detected on the modified pages.")
+
     if not_found_warnings:
         print("\n*** SOME RULES DID NOT MATCH ANYTHING -- check these: ***")
         for w in not_found_warnings:
