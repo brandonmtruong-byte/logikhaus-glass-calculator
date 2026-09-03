@@ -514,13 +514,7 @@ def resolve_line_overlaps(insert_jobs, cover_rects):
 
     gap = 1.0  # small breathing room between adjacent pieces of text
 
-    for job in insert_jobs:
-        if job.get("cover_idx") is None:
-            continue
-        font_obj = fitz.Font(fontfile=job["fontfile"]) if job["fontfile"] else fitz.Font(job["fontkey"])
-        width = font_obj.text_length(job["text"], fontsize=job["size"])
-        cover = cover_rects[job["cover_idx"]]
-        cover.x1 = max(cover.x1, job["x"] + width + gap)
+    
 
     for jobs in lines.values():
         if len(jobs) < 2:
