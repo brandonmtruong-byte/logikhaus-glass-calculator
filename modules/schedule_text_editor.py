@@ -514,7 +514,21 @@ def resolve_line_overlaps(insert_jobs, cover_rects):
 
     gap = 1.0  # small breathing room between adjacent pieces of text
 
-    
+    # LOCAL CHANGE: make sure every insertion's own cover rectangle is at
+    # least as wide as the new text actually being drawn -- not just wide
+    # enough for the old text it replaced. Needed whenever the new word is
+    # longer than the old one, even with no neighboring insertion on the
+    # same line to collide with (e.g. "Pine" -> "Spruce" alone on its
+    # line): without this, the cover rect -- and therefore the preview
+    # highlight, which reuses these same rects -- stops partway through
+    # the new text instead of spanning all of it.
+    for job in insert_jobs:
+        if job.get("cover_idx") is None:
+            continue
+        font_obj = fitz.Font(fontfile=job["fontfile"]) if job["fontfile"] else fitz.Font(job["fontkey"])
+        width = font_obj.text_length(job["text"], fontsize=job["size"])
+        cover = cover_rects[job["cover_idx"]]
+        cover.x1 = max(cover.x1, job["x"] + width + gap)
 
     for jobs in lines.values():
         if len(jobs) < 2:
@@ -671,7 +685,16 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             combined_text = hit["new"]
             if not font_covers_text(fontkey, fontfile, combined_text):
                 fontkey, fontfile = _base14_for_style(fontkey), None
-            cover_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
+            # LOCAL CHANGE: same tight-vertical-band fix as the span-based
+            # path above -- see that comment for why. Here baseline_y/size
+            # are themselves partly derived from the same rect this is
+            # trying to correct for, so this fallback path is inherently
+            # less precise -- but it's still a meaningful improvement over
+            # the raw padded bbox, and this path only runs when styling
+            # info wasn't found at all (rare, already flagged above).
+            cover_y0 = baseline_y - size * 0.78
+            cover_y1 = baseline_y + size * 0.22
+            cover_rects.append(fitz.Rect(rect.x0 - pad, cover_y0, rect.x1 + pad, cover_y1))
             insert_jobs.append({
                 "x": rect.x0, "y": baseline_y, "text": combined_text,
                 "fontkey": fontkey, "fontfile": fontfile, "size": size,
@@ -717,13 +740,29 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                           f"a built-in font", file=sys.stderr)
                     use_fontkey, use_fontfile = _base14_for_style(use_fontkey), None
 
+                # LOCAL CHANGE: the vertical extent of `rect` (from
+                # character-level bboxes in rawdict mode) reflects the
+                # font's *design* ascent/descent, not the visible ink --
+                # generous enough that at normal single-line spacing it
+                # can reach into the line below. Since this rect drives
+                # real content deletion (apply_redactions(), further
+                # down), that's not just a cosmetic overlap: a redaction
+                # rect that touches the next line's text can wipe out
+                # real content on it. baseline_y and size are reliable
+                # values (not derived from the inflated bbox), so build
+                # a tight vertical band directly from them instead --
+                # typical ascent/descent ratios, safely inside normal
+                # line spacing.
+                cover_y0 = baseline_y - size * 0.78
+                cover_y1 = baseline_y + size * 0.22
+
                 # Cover from the start of the old text through to the start
                 # of the next hit in this span (or the end of the span if
                 # this is the last hit) -- so any trailing text sharing the
                 # span, e.g. "OTHER - 3 quantity:", gets reflowed after the
                 # new text instead of being overlapped by it, without
                 # stepping on territory another hit already owns.
-                cover_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, cover_x1 + pad, rect.y1 + pad))
+                cover_rects.append(fitz.Rect(rect.x0 - pad, cover_y0, cover_x1 + pad, cover_y1))
                 insert_jobs.append({
                     "x": rect.x0, "y": baseline_y, "text": combined_text,
                     "fontkey": use_fontkey, "fontfile": use_fontfile, "size": size,
