@@ -53,7 +53,9 @@ st.markdown("---")
 
 # ── Preview renderers (table styling for the mass / frame steps) ───────────
 
-def render_mass_preview(rows):
+def render_mass_preview(result, doc):
+    rows  = result['rows']
+    pages = result['pages']
     if not rows:
         st.info("No glass lines found on this document.")
         return
@@ -81,8 +83,19 @@ def render_mass_preview(rows):
         col1.metric("Total glass items", len(rows))
         col2.metric("Total estimated weight", f"{sum(weights):.1f} kg")
 
+    if pages:
+        show_images = st.toggle(
+            f"Show preview of {len(pages)} page(s)", value=False, key="mass_show_images"
+        )
+        if show_images:
+            for pno in pages:
+                pix = doc[pno - 1].get_pixmap(dpi=150)
+                st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
 
-def render_frame_preview(rows):
+
+def render_frame_preview(result, doc):
+    rows  = result['rows']
+    pages = result['pages']
     if not rows:
         st.info("No windows found on this document.")
         return
@@ -99,6 +112,15 @@ def render_frame_preview(rows):
     error_count = sum(1 for r in rows if r['Frame Code'] == 'ERROR')
     if error_count:
         st.warning(f'{error_count} window(s) could not be matched to a frame code- see Details below.')
+
+    if pages:
+        show_images = st.toggle(
+            f"Show preview of {len(pages)} page(s)", value=False, key="frame_show_images"
+        )
+        if show_images:
+            for pno in pages:
+                pix = doc[pno - 1].get_pixmap(dpi=150)
+                st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
 
     if st.toggle("Show raw block text per window", value=False, key="frame_show_debug"):
         for r in rows:
@@ -274,9 +296,9 @@ for i, step_key in enumerate(STEP_ORDER):
                 elif step_key == 'text_replace':
                     render_text_replace_preview(result)
                 elif step_key == 'mass':
-                    render_mass_preview(result)
+                    render_mass_preview(result, doc)
                 elif step_key == 'frame':
-                    render_frame_preview(result)
+                    render_frame_preview(result, doc)
                 elif step_key == 'legend':
                     render_legend_preview(result)
 

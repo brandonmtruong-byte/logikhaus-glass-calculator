@@ -45,20 +45,38 @@ def apply_logo(doc):
 
 
 def apply_mass(doc, glass_lookup):
-    """Run the glass weight calculator over every page. Returns the combined result rows."""
+    """
+    Run the glass weight calculator over every page.
+    Returns {'rows': combined result rows, 'pages': sorted list of page
+    numbers (1-indexed) that had at least one glass line} so the UI can
+    render an image preview of just the affected pages.
+    """
     rows = []
-    for page in doc:
-        rows.extend(process_glass_weights(page, glass_lookup))
-    return rows
+    pages = []
+    for i, page in enumerate(doc, start=1):
+        page_rows = process_glass_weights(page, glass_lookup)
+        if page_rows:
+            pages.append(i)
+        rows.extend(page_rows)
+    return {'rows': rows, 'pages': pages}
 
 
 def apply_frame(doc, frame_codes, frame_rules, glass_type_lookup):
-    """Run the frame code matcher over every page. Returns the combined result rows."""
+    """
+    Run the frame code matcher over every page.
+    Returns {'rows': combined result rows, 'pages': sorted list of page
+    numbers (1-indexed) that had at least one window} so the UI can
+    render an image preview of just the affected pages.
+    """
     rules_by_category = group_rules_by_category(frame_rules)
     rows = []
-    for page in doc:
-        rows.extend(process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup))
-    return rows
+    pages = []
+    for i, page in enumerate(doc, start=1):
+        page_rows = process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup)
+        if page_rows:
+            pages.append(i)
+        rows.extend(page_rows)
+    return {'rows': rows, 'pages': pages}
 
 
 def apply_legend(doc):
