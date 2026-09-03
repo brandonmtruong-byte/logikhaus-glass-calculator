@@ -790,13 +790,24 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                         continue
 
                 pad = 0.4
+                # LOCAL CHANGE: same tight-vertical-band fix as the replace
+                # paths above -- span["origin"][1] (baseline) and
+                # span["size"] are reliable, unlike the raw bbox's y0/y1
+                # which reflects font design metrics and can reach into
+                # the line below at normal line spacing. Real content
+                # deletion via apply_redactions() further down makes that
+                # a data-loss risk, not just a cosmetic one.
+                baseline_y = span["origin"][1]
+                size = span["size"]
+                cover_y0 = baseline_y - size * 0.78
+                cover_y1 = baseline_y + size * 0.22
                 if whole_line and span is not None:
                     # The instruction said to remove the entire line this
                     # text lives on, not just the matched words -- e.g.
                     # "the whole line of 'U-value (W/m2K)'" means delete
                     # the whole "U-value (W/m2K)= 1.39" line.
-                    lx0, ly0, lx1, ly1 = span.get("line_bbox", span["bbox"])
-                    cover_rects.append(fitz.Rect(lx0 - pad, ly0 - pad, lx1 + pad, ly1 + pad))
+                    lx0, _, lx1, _ = span.get("line_bbox", span["bbox"])
+                    cover_rects.append(fitz.Rect(lx0 - pad, cover_y0, lx1 + pad, cover_y1))
                     total_deleted += 1
                     modified_pages.add(page_num)
                     continue
@@ -806,12 +817,12 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                         # The whole span is essentially just this phrase
                         # (plus separators like " - ") -- remove all of it
                         # so no dangling punctuation is left behind.
-                        bx0, by0, bx1, by1 = span["bbox"]
-                        cover_rects.append(fitz.Rect(bx0 - pad, by0 - pad, bx1 + pad, by1 + pad))
+                        bx0, _, bx1, _ = span["bbox"]
+                        cover_rects.append(fitz.Rect(bx0 - pad, cover_y0, bx1 + pad, cover_y1))
                         total_deleted += 1
                         modified_pages.add(page_num)
                         continue
-                cover_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
+                cover_rects.append(fitz.Rect(rect.x0 - pad, cover_y0, rect.x1 + pad, cover_y1))
                 total_deleted += 1
                 modified_pages.add(page_num)
 
