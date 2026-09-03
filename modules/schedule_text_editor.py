@@ -833,7 +833,12 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
 
         # LOCAL CHANGE: snapshot this page's finalized edit regions before
         # cover_rects gets reset at the top of the next page's iteration.
-        page_highlight_rects[page_num] = list(cover_rects)
+        highlight_pad = 1.5
+        page_highlight_rects[page_num] = [
+            fitz.Rect(r.x0 - highlight_pad, r.y0 - highlight_pad,
+                      r.x1 + highlight_pad, r.y1 + highlight_pad)
+            for r in cover_rects
+        ]
 
         # True redaction: this removes the underlying text objects that
         # intersect each cover rectangle from the page's content stream
