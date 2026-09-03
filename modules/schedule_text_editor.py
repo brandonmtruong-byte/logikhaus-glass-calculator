@@ -833,7 +833,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
 
         # LOCAL CHANGE: snapshot this page's finalized edit regions before
         # cover_rects gets reset at the top of the next page's iteration.
-        highlight_pad = 10
+        highlight_pad = 5
         page_highlight_rects[page_num] = [
             fitz.Rect(r.x0 - highlight_pad, r.y0 - highlight_pad,
                       r.x1 + highlight_pad, r.y1 + highlight_pad)
