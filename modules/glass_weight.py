@@ -8,6 +8,7 @@ for the on-screen results table.
 import re
 import streamlit as st
 import gspread
+import fitz
 
 from .config import SHEET_ID, GLASS_DENSITY, get_google_credentials
 
@@ -109,6 +110,22 @@ def match_glass_to_size(glass_line, size_entries):
     return size_entry
 
 
+def _stamp_highlight_rect(x, y_base, text, fontsize, fontname='helv'):
+    """
+    Bounding rect around a stamped text label, for preview highlighting
+    only -- this is never used for redaction/deletion (unlike the
+    Schedule Text Editor's cover rects), so it doesn't need to stay
+    tight. Padded generously so it's easy to spot in the preview.
+    """
+    font_obj = fitz.Font(fontname)
+    width = font_obj.text_length(text, fontsize=fontsize)
+    pad = 2.0
+    return fitz.Rect(
+        x - pad, y_base - fontsize * 0.85 - pad,
+        x + width + pad, y_base + fontsize * 0.25 + pad,
+    )
+
+
 def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
     """
     Given one glass line matched to one size entry:
@@ -128,6 +145,7 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
             'Area (m²)': '—',
             'Weight':    'Skipped (irregular shape)',
             '_skip':     True,
+            '_highlight_rect': None,
         }
 
     area        = (w / 1000) * (h / 1000)
@@ -139,12 +157,16 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
         weight    = area * thickness * GLASS_DENSITY
 
         # Stamp the computed weight back onto the PDF next to the glass line
+        stamp_text = f'[{weight:.1f} kg]'
         page.insert_text(
             (page_width - 90, glass_line['y_base']),
-            f'[{weight:.1f} kg]',
+            stamp_text,
             fontsize=glass_line['font_size'],
             fontname='helv',
             color=(0.0, 0.0, 0.0),
+        )
+        highlight_rect = _stamp_highlight_rect(
+            page_width - 90, glass_line['y_base'], stamp_text, glass_line['font_size']
         )
 
         return {
@@ -154,6 +176,7 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
             'Area (m²)': f'{area:.3f}',
             'Weight':    f'{weight:.1f} kg',
             '_skip':     False,
+            '_highlight_rect': highlight_rect,
         }
 
     # Genuinely ambiguous: 2+ LHG codes found on the line — skip entirely
@@ -165,16 +188,21 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
             'Area (m²)': f'{area:.3f}',
             'Weight':    'Multiple codes — skipped',
             '_skip':     False,
+            '_highlight_rect': None,
         }
 
     # No code found, OR a single code was found but isn't in glass_lookup —
     # fall back to stamping the area instead of a weight.
+    stamp_text = f'[{area:.3f} m²]'
     page.insert_text(
         (page_width - 90, glass_line['y_base']),
-        f'[{area:.3f} m²]',
+        stamp_text,
         fontsize=glass_line['font_size'],
         fontname='helv',
         color=(0.0, 0.0, 0.0),
+    )
+    highlight_rect = _stamp_highlight_rect(
+        page_width - 90, glass_line['y_base'], stamp_text, glass_line['font_size']
     )
     label = lhg_code if lhg_code else 'No LHG code'
     return {
@@ -184,6 +212,7 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
         'Area (m²)': f'{area:.3f}',
         'Weight':    f'No LHG match — area shown ({area:.3f} m²)',
         '_skip':     False,
+        '_highlight_rect': highlight_rect,
     }
 
 

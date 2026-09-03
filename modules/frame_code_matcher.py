@@ -9,6 +9,7 @@ flagged as an error and nothing is stamped.
 """
 
 import re
+import fitz
 
 # Order matters: Threshold's 'oType' rules depend on Opening Type already
 # being resolved, so Threshold must be resolved last.
@@ -202,6 +203,21 @@ def match_frame_code(resolved, frame_codes):
     return None, f'Multiple CODES rows match ({len(matches)})'
 
 
+def _stamp_highlight_rect(x, y_base, text, fontsize, fontname='helv'):
+    """
+    Bounding rect around a stamped frame code label, for preview
+    highlighting only -- purely visual, never used for any redaction or
+    deletion, so it doesn't need to stay tight.
+    """
+    font_obj = fitz.Font(fontname)
+    width = font_obj.text_length(text, fontsize=fontsize)
+    pad = 2.0
+    return fitz.Rect(
+        x - pad, y_base - fontsize * 0.85 - pad,
+        x + width + pad, y_base + fontsize * 0.25 + pad,
+    )
+
+
 def process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup=None):
     """
     Full frame-code pass for a single page: split into window blocks,
@@ -230,6 +246,7 @@ def process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup=
             **{cat: resolved.get(cat, '') for cat in CATEGORY_ORDER},
             'Details':    '',
             'Block Text': block_text,
+            '_highlight_rect': None,
         }
 
         if errors:
@@ -244,12 +261,17 @@ def process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup=
             continue
 
         if system_line:
+            stamp_text = f'[{frame_code}]'
             page.insert_text(
                 (system_line['bbox'][0], system_line['bbox'][1] - 2),
-                f'[{frame_code}]',
+                stamp_text,
                 fontsize=system_line['font_size'],
                 fontname='helv',
                 color=(0.0, 0.0, 0.0),
+            )
+            row['_highlight_rect'] = _stamp_highlight_rect(
+                system_line['bbox'][0], system_line['bbox'][1] - 2,
+                stamp_text, system_line['font_size']
             )
 
         row['Frame Code'] = frame_code

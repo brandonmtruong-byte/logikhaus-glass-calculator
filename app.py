@@ -88,9 +88,21 @@ def render_mass_preview(result, doc):
             f"Show preview of {len(pages)} page(s)", value=False, key="mass_show_images"
         )
         if show_images:
+            # Draw highlights on a throwaway copy, never the real working
+            # doc -- doc.tobytes() + reopen keeps this purely visual with
+            # zero risk of touching what actually gets downloaded.
+            preview_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
+            highlight_rects = result.get('highlight_rects', {})
             for pno in pages:
-                pix = doc[pno - 1].get_pixmap(dpi=150)
+                preview_page = preview_doc[pno - 1]
+                for rect in highlight_rects.get(pno, []):
+                    preview_page.draw_rect(
+                        rect, color=(0.85, 0.55, 0), width=1.2,
+                        fill=(1, 0.92, 0.55), fill_opacity=0.45, overlay=True
+                    )
+                pix = preview_page.get_pixmap(dpi=150)
                 st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
+            preview_doc.close()
 
 
 def render_frame_preview(result, doc):
@@ -118,9 +130,19 @@ def render_frame_preview(result, doc):
             f"Show preview of {len(pages)} page(s)", value=False, key="frame_show_images"
         )
         if show_images:
+            # Same throwaway-copy pattern as the mass preview above.
+            preview_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
+            highlight_rects = result.get('highlight_rects', {})
             for pno in pages:
-                pix = doc[pno - 1].get_pixmap(dpi=150)
+                preview_page = preview_doc[pno - 1]
+                for rect in highlight_rects.get(pno, []):
+                    preview_page.draw_rect(
+                        rect, color=(0.85, 0.55, 0), width=1.2,
+                        fill=(1, 0.92, 0.55), fill_opacity=0.45, overlay=True
+                    )
+                pix = preview_page.get_pixmap(dpi=150)
                 st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
+            preview_doc.close()
 
     if st.toggle("Show raw block text per window", value=False, key="frame_show_debug"):
         for r in rows:

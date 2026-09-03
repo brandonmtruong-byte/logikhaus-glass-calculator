@@ -48,35 +48,45 @@ def apply_mass(doc, glass_lookup):
     """
     Run the glass weight calculator over every page.
     Returns {'rows': combined result rows, 'pages': sorted list of page
-    numbers (1-indexed) that had at least one glass line} so the UI can
-    render an image preview of just the affected pages.
+    numbers (1-indexed) that had at least one glass line, 'highlight_rects':
+    {page_num: [rects]} for every stamp actually written} so the UI can
+    render an image preview of just the affected pages, with highlights.
     """
     rows = []
     pages = []
+    highlight_rects = {}
     for i, page in enumerate(doc, start=1):
         page_rows = process_glass_weights(page, glass_lookup)
         if page_rows:
             pages.append(i)
+        rects = [r['_highlight_rect'] for r in page_rows if r.get('_highlight_rect')]
+        if rects:
+            highlight_rects[i] = rects
         rows.extend(page_rows)
-    return {'rows': rows, 'pages': pages}
+    return {'rows': rows, 'pages': pages, 'highlight_rects': highlight_rects}
 
 
 def apply_frame(doc, frame_codes, frame_rules, glass_type_lookup):
     """
     Run the frame code matcher over every page.
     Returns {'rows': combined result rows, 'pages': sorted list of page
-    numbers (1-indexed) that had at least one window} so the UI can
-    render an image preview of just the affected pages.
+    numbers (1-indexed) that had at least one window, 'highlight_rects':
+    {page_num: [rects]} for every stamp actually written} so the UI can
+    render an image preview of just the affected pages, with highlights.
     """
     rules_by_category = group_rules_by_category(frame_rules)
     rows = []
     pages = []
+    highlight_rects = {}
     for i, page in enumerate(doc, start=1):
         page_rows = process_frame_codes(page, frame_codes, rules_by_category, glass_type_lookup)
         if page_rows:
             pages.append(i)
+        rects = [r['_highlight_rect'] for r in page_rows if r.get('_highlight_rect')]
+        if rects:
+            highlight_rects[i] = rects
         rows.extend(page_rows)
-    return {'rows': rows, 'pages': pages}
+    return {'rows': rows, 'pages': pages, 'highlight_rects': highlight_rects}
 
 
 def apply_legend(doc):
