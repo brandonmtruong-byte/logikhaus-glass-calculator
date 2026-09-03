@@ -692,8 +692,8 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             # less precise -- but it's still a meaningful improvement over
             # the raw padded bbox, and this path only runs when styling
             # info wasn't found at all (rare, already flagged above).
-            cover_y0 = baseline_y - size * 0.78
-            cover_y1 = baseline_y + size * 0.22
+            cover_y0 = baseline_y - size * 0.55
+            cover_y1 = baseline_y + size * 0.10
             cover_rects.append(fitz.Rect(rect.x0 - pad, cover_y0, rect.x1 + pad, cover_y1))
             insert_jobs.append({
                 "x": rect.x0, "y": baseline_y, "text": combined_text,
@@ -753,8 +753,8 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 # a tight vertical band directly from them instead --
                 # typical ascent/descent ratios, safely inside normal
                 # line spacing.
-                cover_y0 = baseline_y - size * 0.78
-                cover_y1 = baseline_y + size * 0.22
+                cover_y0 = baseline_y - size * 0.55
+                cover_y1 = baseline_y + size * 0.10
 
                 # Cover from the start of the old text through to the start
                 # of the next hit in this span (or the end of the span if
@@ -799,8 +799,8 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 # a data-loss risk, not just a cosmetic one.
                 baseline_y = span["origin"][1]
                 size = span["size"]
-                cover_y0 = baseline_y - size * 0.78
-                cover_y1 = baseline_y + size * 0.22
+                cover_y0 = baseline_y - size * 0.55
+                cover_y1 = baseline_y + size * 0.10
                 if whole_line and span is not None:
                     # The instruction said to remove the entire line this
                     # text lives on, not just the matched words -- e.g.
