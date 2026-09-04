@@ -7,6 +7,7 @@ from modules.styles import inject_css, render_header, render_eyebrow, render_ste
 from modules.glass_weight import load_glass_lookup, load_glass_type_lookup
 from modules.frame_code_data import load_frame_codes, load_frame_rules
 from modules.config import TEMPLATE_XLSX_PATH
+from modules.test_files import list_test_files, load_test_file
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
@@ -190,6 +191,40 @@ def render_legend_preview(status):
         st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder- legend page was not added.')
 
 
+def start_new_document(file_bytes, file_name, unique_id):
+    """
+    (Re)initialize the stepper session state for a new document -- shared
+    by both a real upload and the dev-only test file picker below, so the
+    two paths can never drift apart or process a file differently.
+    """
+    if st.session_state.get('doc') is not None:
+        st.session_state.doc.close()
+    st.session_state.uploaded_file_id = unique_id
+    st.session_state.doc              = fitz.open(stream=file_bytes, filetype="pdf")
+    st.session_state.file_name        = file_name
+    st.session_state.current_step     = 0
+    st.session_state.step_status      = {k: 'pending' for k in STEP_ORDER}
+    st.session_state.step_results     = {}
+
+
+# ── Dev-only: load a test file already committed to the repo ───────────────
+# Not part of the stepper flow in modules/steps.py -- this is purely a
+# shortcut for getting bytes onto the screen, feeding into the exact same
+# start_new_document() path a real upload uses below.
+test_files = list_test_files()
+if test_files:
+    with st.expander("🧪 Load a test file (dev only)", expanded=False):
+        selected_test_file = st.selectbox(
+            "Choose a file from the Test Files folder", test_files, key="test_file_select"
+        )
+        if st.button("Load test file", key="load_test_file_btn", type="secondary"):
+            start_new_document(
+                load_test_file(selected_test_file),
+                selected_test_file,
+                f"testfile:{selected_test_file}",
+            )
+            st.rerun()
+
 # ── File upload ──────────────────────────────────────────────────────────
 render_eyebrow("Upload schedule")
 uploaded = st.file_uploader(
@@ -198,19 +233,14 @@ uploaded = st.file_uploader(
     label_visibility="collapsed"
 )
 
-if uploaded is None:
-    st.stop()
+# New upload -> (re)initialize the stepper state. A test file may already
+# have set st.session_state.doc above -- either way this only fires when
+# uploaded is a genuinely new file, so it can't clobber a loaded test file.
+if uploaded is not None and st.session_state.get('uploaded_file_id') != uploaded.file_id:
+    start_new_document(uploaded.read(), uploaded.name, uploaded.file_id)
 
-# New upload (or first upload) -> (re)initialize the stepper state
-if st.session_state.get('uploaded_file_id') != uploaded.file_id:
-    if st.session_state.get('doc') is not None:
-        st.session_state.doc.close()
-    st.session_state.uploaded_file_id = uploaded.file_id
-    st.session_state.doc              = fitz.open(stream=uploaded.read(), filetype="pdf")
-    st.session_state.file_name        = uploaded.name
-    st.session_state.current_step     = 0
-    st.session_state.step_status      = {k: 'pending' for k in STEP_ORDER}
-    st.session_state.step_results     = {}
+if st.session_state.get('doc') is None:
+    st.stop()
 
 doc = st.session_state.doc
 

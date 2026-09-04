@@ -33,6 +33,9 @@ FRAME_RULES_TAB = 'RULESUPDATE'
 # ── Schedule text editor (Step 2 — vendored from jennynt-LGH/Schedule-Editor) ─
 TEMPLATE_XLSX_PATH = os.path.join(BASE_DIR, "template_instructions.xlsx")
 
+# ── Test files (dev-only shortcut, not part of the stepper flow) ────────────
+TEST_FILES_DIR = os.path.join(BASE_DIR, "Test Files")
+
 # Google Sheets API scopes used by every module that reads a sheet.
 GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
