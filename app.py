@@ -36,7 +36,7 @@ if 'active_view' not in st.session_state:
 col_view1, col_view2 = st.columns(2)
 with col_view1:
     if st.button(
-        "PDF Modifier", use_container_width=True,
+        "PDF Editor", use_container_width=True,
         type="primary" if st.session_state.active_view == 'PDF Modifier' else "secondary",
     ):
         st.session_state.active_view = 'PDF Modifier'
@@ -248,7 +248,7 @@ if st.session_state.active_view == 'PDF Modifier':
     # same start_new_document() path a real upload uses below.
     test_files = list_test_files()
     if test_files:
-        with st.expander("🧪 Load a test file (dev only)", expanded=False):
+        with st.expander("Load a test file (dev only)", expanded=False):
             selected_test_file = st.selectbox(
                 "Choose a file from the Test Files folder", test_files, key="test_file_select"
             )
