@@ -6,8 +6,9 @@ import fitz
 from modules.styles import inject_css, render_header, render_eyebrow, render_step_row, render_active_step_header
 from modules.glass_weight import load_glass_lookup, load_glass_type_lookup
 from modules.frame_code_data import load_frame_codes, load_frame_rules
-from modules.config import TEMPLATE_XLSX_PATH
+from modules.config import TEMPLATE_XLSX_PATH, CERTIFICATE_TEMPLATE_PATH
 from modules.test_files import list_test_files, load_test_file
+from modules.certificate_creator import extract_quote_data, fill_certificate
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
@@ -23,36 +24,36 @@ st.set_page_config(
 inject_css()
 render_header()
 
-# ── Load reference data (Google Sheets - independent of any uploaded PDF) ──
-try:
-    with st.spinner('Loading glass data from sheet...'):
-        glass_lookup      = load_glass_lookup()
-        glass_type_lookup = load_glass_type_lookup()
-    st.markdown(f'<div class="status-box">✓ Glass database loaded- {len(glass_lookup)} codes</div>',
-                unsafe_allow_html=True)
-except Exception as e:
-    st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
-    import traceback
-    st.code(traceback.format_exc())
-    st.stop()
+# ── View switcher ────────────────────────────────────────────────────────
+# Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
+# rerun regardless of which one is visually shown, so st.tabs() alone
+# wouldn't stop switching to Certificate Creator from still hitting
+# Google Sheets for glass/frame data. This uses real if/elif branching on
+# session_state instead, so only the active view's code ever runs.
+if 'active_view' not in st.session_state:
+    st.session_state.active_view = 'PDF Modifier'
 
-frame_codes, frame_rules = None, None
-try:
-    with st.spinner('Loading frame code data...'):
-        frame_codes = load_frame_codes()
-        frame_rules = load_frame_rules()
-    st.markdown(
-        f'<div class="status-box">✓ Frame code data loaded- '
-        f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
-        unsafe_allow_html=True
-    )
-except Exception as e:
-    st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
-               f'({type(e).__name__}: {e})')
+col_view1, col_view2 = st.columns(2)
+with col_view1:
+    if st.button(
+        "PDF Modifier", use_container_width=True,
+        type="primary" if st.session_state.active_view == 'PDF Modifier' else "secondary",
+    ):
+        st.session_state.active_view = 'PDF Modifier'
+        st.rerun()
+with col_view2:
+    if st.button(
+        "Certificate Creator", use_container_width=True,
+        type="primary" if st.session_state.active_view == 'Certificate Creator' else "secondary",
+    ):
+        st.session_state.active_view = 'Certificate Creator'
+        st.rerun()
 
 st.markdown("---")
 
 # ── Preview renderers (table styling for the mass / frame steps) ───────────
+# Function definitions only -- harmless to leave outside the view branches
+# below, since defining a function has no side effects until it's called.
 
 def render_mass_preview(result, doc):
     rows  = result['rows']
@@ -207,171 +208,265 @@ def start_new_document(file_bytes, file_name, unique_id):
     st.session_state.step_results     = {}
 
 
-# ── Dev-only: load a test file already committed to the repo ───────────────
-# Not part of the stepper flow in modules/steps.py -- this is purely a
-# shortcut for getting bytes onto the screen, feeding into the exact same
-# start_new_document() path a real upload uses below.
-test_files = list_test_files()
-if test_files:
-    with st.expander("Load a test file (dev only)", expanded=False):
-        selected_test_file = st.selectbox(
-            "Choose a file from the Test Files folder", test_files, key="test_file_select"
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: PDF MODIFIER — the existing stepper flow, entirely unchanged
+# ═════════════════════════════════════════════════════════════════════════
+if st.session_state.active_view == 'PDF Modifier':
+
+    # ── Load reference data (Google Sheets - independent of any uploaded PDF)
+    try:
+        with st.spinner('Loading glass data from sheet...'):
+            glass_lookup      = load_glass_lookup()
+            glass_type_lookup = load_glass_type_lookup()
+        st.markdown(f'<div class="status-box">✓ Glass database loaded- {len(glass_lookup)} codes</div>',
+                    unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
+        import traceback
+        st.code(traceback.format_exc())
+        st.stop()
+
+    frame_codes, frame_rules = None, None
+    try:
+        with st.spinner('Loading frame code data...'):
+            frame_codes = load_frame_codes()
+            frame_rules = load_frame_rules()
+        st.markdown(
+            f'<div class="status-box">✓ Frame code data loaded- '
+            f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
+            unsafe_allow_html=True
         )
-        if st.button("Load test file", key="load_test_file_btn", type="secondary"):
-            start_new_document(
-                load_test_file(selected_test_file),
-                selected_test_file,
-                f"testfile:{selected_test_file}",
+    except Exception as e:
+        st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
+                   f'({type(e).__name__}: {e})')
+
+    st.markdown("---")
+
+    # ── Dev-only: load a test file already committed to the repo ───────────
+    # Not part of the stepper flow in modules/steps.py -- this is purely a
+    # shortcut for getting bytes onto the screen, feeding into the exact
+    # same start_new_document() path a real upload uses below.
+    test_files = list_test_files()
+    if test_files:
+        with st.expander("🧪 Load a test file (dev only)", expanded=False):
+            selected_test_file = st.selectbox(
+                "Choose a file from the Test Files folder", test_files, key="test_file_select"
             )
-            st.session_state.test_file_loaded_message = selected_test_file
+            if st.button("Load test file", key="load_test_file_btn", type="secondary"):
+                start_new_document(
+                    load_test_file(selected_test_file),
+                    selected_test_file,
+                    f"testfile:{selected_test_file}",
+                )
+                st.session_state.test_file_loaded_message = selected_test_file
+                st.rerun()
+
+    if st.session_state.get('test_file_loaded_message'):
+        st.success(f"✓ Loaded test file: {st.session_state.test_file_loaded_message}")
+        del st.session_state['test_file_loaded_message']
+
+    # ── File upload ─────────────────────────────────────────────────────
+    render_eyebrow("Upload schedule")
+    uploaded = st.file_uploader(
+        "Drop a Logikhaus PDF schedule here",
+        type="pdf",
+        label_visibility="collapsed"
+    )
+
+    # New upload -> (re)initialize the stepper state. A test file may
+    # already have set st.session_state.doc above -- either way this only
+    # fires when uploaded is a genuinely new file, so it can't clobber a
+    # loaded test file.
+    if uploaded is not None and st.session_state.get('uploaded_file_id') != uploaded.file_id:
+        start_new_document(uploaded.read(), uploaded.name, uploaded.file_id)
+
+    if st.session_state.get('doc') is None:
+        st.stop()
+
+    doc = st.session_state.doc
+
+    st.markdown("---")
+
+    col_title, col_reset = st.columns([4, 1])
+    with col_title:
+        render_eyebrow("Processing steps")
+    with col_reset:
+        if st.button("Start Over", use_container_width=True, type="secondary"):
+            doc.close()
+            for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results']:
+                st.session_state.pop(key, None)
             st.rerun()
 
-if st.session_state.get('test_file_loaded_message'):
-    st.success(f"✓ Loaded test file: {st.session_state.test_file_loaded_message}")
-    del st.session_state['test_file_loaded_message']
+    # ── Stepper ──────────────────────────────────────────────────────────
+    for i, step_key in enumerate(STEP_ORDER):
+        label  = STEP_LABELS[step_key]
+        status = st.session_state.step_status[step_key]
 
-# ── File upload ──────────────────────────────────────────────────────────
-render_eyebrow("Upload schedule")
-uploaded = st.file_uploader(
-    "Drop a Logikhaus PDF schedule here",
-    type="pdf",
-    label_visibility="collapsed"
-)
+        # Already-passed step: collapsed one-line summary (✓ applied / ⏭ skipped)
+        if i < st.session_state.current_step:
+            render_step_row(i + 1, label, status)
+            continue
 
-# New upload -> (re)initialize the stepper state. A test file may already
-# have set st.session_state.doc above -- either way this only fires when
-# uploaded is a genuinely new file, so it can't clobber a loaded test file.
-if uploaded is not None and st.session_state.get('uploaded_file_id') != uploaded.file_id:
-    start_new_document(uploaded.read(), uploaded.name, uploaded.file_id)
+        # Not-yet-reached step: locked placeholder
+        if i > st.session_state.current_step:
+            render_step_row(i + 1, label, 'locked')
+            continue
 
-if st.session_state.get('doc') is None:
-    st.stop()
+        # ── The current active step- highlighted bordered container ─────
+        with st.container(border=True, key="active_step"):
+            render_active_step_header(i + 1, len(STEP_ORDER), label)
 
-doc = st.session_state.doc
+            if status == 'pending':
+                # Frame step needs sheet data to be available at all
+                frame_data_missing = step_key == 'frame' and (frame_codes is None or frame_rules is None)
+                if frame_data_missing:
+                    st.warning("Frame code sheet isn't available- this step can only be skipped.")
 
-st.markdown("---")
+                # Text replace step needs its own instructions .xlsx uploaded first
+                text_replace_xlsx = None
+                if step_key == 'text_replace':
+                    if os.path.exists(TEMPLATE_XLSX_PATH):
+                        with open(TEMPLATE_XLSX_PATH, "rb") as f:
+                            st.download_button(
+                                "Download blank instructions template (.xlsx)",
+                                data=f.read(),
+                                file_name="template_instructions.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"template_download_{step_key}",
+                            )
+                    text_replace_xlsx = st.file_uploader(
+                        "Instructions spreadsheet (.xlsx)", type="xlsx", key=f"xlsx_upload_{step_key}"
+                    )
 
-col_title, col_reset = st.columns([4, 1])
-with col_title:
-    render_eyebrow("Processing steps")
-with col_reset:
-    if st.button("Start Over", use_container_width=True, type="secondary"):
-        doc.close()
-        for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results']:
-            st.session_state.pop(key, None)
-        st.rerun()
+                text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
+                apply_disabled = frame_data_missing or text_replace_missing
 
-# ── Stepper ──────────────────────────────────────────────────────────────
-for i, step_key in enumerate(STEP_ORDER):
-    label  = STEP_LABELS[step_key]
-    status = st.session_state.step_status[step_key]
+                col_apply, col_skip = st.columns([3, 1])
+                with col_apply:
+                    apply_clicked = st.button(
+                        f"Apply {label}", key=f"apply_{step_key}",
+                        use_container_width=True, disabled=apply_disabled, type="primary",
+                    )
+                with col_skip:
+                    skip_clicked = st.button(
+                        "Skip", key=f"skip_{step_key}", use_container_width=True, type="secondary",
+                    )
 
-    # Already-passed step: collapsed one-line summary (✓ applied / ⏭ skipped)
-    if i < st.session_state.current_step:
-        render_step_row(i + 1, label, status)
-        continue
+                if apply_clicked:
+                    with st.spinner(f'Applying {label}...'):
+                        if step_key == 'logo':
+                            apply_logo(doc)
+                            st.session_state.step_results[step_key] = None
+                        elif step_key == 'text_replace':
+                            result = apply_text_replace(doc, text_replace_xlsx.getvalue())
+                            st.session_state.doc = result.pop('doc')
+                            st.session_state.step_results[step_key] = result
+                        elif step_key == 'mass':
+                            st.session_state.step_results[step_key] = apply_mass(doc, glass_lookup)
+                        elif step_key == 'frame':
+                            st.session_state.step_results[step_key] = apply_frame(
+                                doc, frame_codes, frame_rules, glass_type_lookup
+                            )
+                        elif step_key == 'legend':
+                            st.session_state.step_results[step_key] = apply_legend(doc)
+                    st.session_state.step_status[step_key] = 'applied'
+                    st.rerun()
 
-    # Not-yet-reached step: locked placeholder
-    if i > st.session_state.current_step:
-        render_step_row(i + 1, label, 'locked')
-        continue
+                if skip_clicked:
+                    st.session_state.step_status[step_key] = 'skipped'
+                    st.session_state.current_step += 1
+                    st.rerun()
 
-    # ── The current active step- highlighted bordered container ─────────
-    with st.container(border=True, key="active_step"):
-        render_active_step_header(i + 1, len(STEP_ORDER), label)
+            elif status == 'applied':
+                result = st.session_state.step_results.get(step_key)
 
-        if status == 'pending':
-            # Frame step needs sheet data to be available at all
-            frame_data_missing = step_key == 'frame' and (frame_codes is None or frame_rules is None)
-            if frame_data_missing:
-                st.warning("Frame code sheet isn't available- this step can only be skipped.")
+                st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
 
-            # Text replace step needs its own instructions .xlsx uploaded first
-            text_replace_xlsx = None
-            if step_key == 'text_replace':
-                if os.path.exists(TEMPLATE_XLSX_PATH):
-                    with open(TEMPLATE_XLSX_PATH, "rb") as f:
-                        st.download_button(
-                            "Download blank instructions template (.xlsx)",
-                            data=f.read(),
-                            file_name="template_instructions.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"template_download_{step_key}",
-                        )
-                text_replace_xlsx = st.file_uploader(
-                    "Instructions spreadsheet (.xlsx)", type="xlsx", key=f"xlsx_upload_{step_key}"
-                )
-
-            text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
-            apply_disabled = frame_data_missing or text_replace_missing
-
-            col_apply, col_skip = st.columns([3, 1])
-            with col_apply:
-                apply_clicked = st.button(
-                    f"Apply {label}", key=f"apply_{step_key}",
-                    use_container_width=True, disabled=apply_disabled, type="primary",
-                )
-            with col_skip:
-                skip_clicked = st.button(
-                    "Skip", key=f"skip_{step_key}", use_container_width=True, type="secondary",
-                )
-
-            if apply_clicked:
-                with st.spinner(f'Applying {label}...'):
+                with st.expander("View details", expanded=False):
                     if step_key == 'logo':
-                        apply_logo(doc)
-                        st.session_state.step_results[step_key] = None
+                        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
+                        st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
                     elif step_key == 'text_replace':
-                        result = apply_text_replace(doc, text_replace_xlsx.getvalue())
-                        st.session_state.doc = result.pop('doc')
-                        st.session_state.step_results[step_key] = result
+                        render_text_replace_preview(result)
                     elif step_key == 'mass':
-                        st.session_state.step_results[step_key] = apply_mass(doc, glass_lookup)
+                        render_mass_preview(result, doc)
                     elif step_key == 'frame':
-                        st.session_state.step_results[step_key] = apply_frame(
-                            doc, frame_codes, frame_rules, glass_type_lookup
-                        )
+                        render_frame_preview(result, doc)
                     elif step_key == 'legend':
-                        st.session_state.step_results[step_key] = apply_legend(doc)
-                st.session_state.step_status[step_key] = 'applied'
-                st.rerun()
+                        render_legend_preview(result)
 
-            if skip_clicked:
-                st.session_state.step_status[step_key] = 'skipped'
-                st.session_state.current_step += 1
-                st.rerun()
+                if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True, type="primary"):
+                    st.session_state.current_step += 1
+                    st.rerun()
 
-        elif status == 'applied':
-            result = st.session_state.step_results.get(step_key)
+    # ── All steps done: download ────────────────────────────────────────
+    if st.session_state.current_step >= len(STEP_ORDER):
+        render_eyebrow("All steps complete")
+        out_bytes = doc.tobytes()
+        out_name  = st.session_state.file_name.replace('.pdf', '_processed.pdf')
+        st.download_button(
+            label="Download annotated PDF",
+            data=out_bytes,
+            file_name=out_name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
-            st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
 
-            with st.expander("View details", expanded=False):
-                if step_key == 'logo':
-                    pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
-                    st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
-                elif step_key == 'text_replace':
-                    render_text_replace_preview(result)
-                elif step_key == 'mass':
-                    render_mass_preview(result, doc)
-                elif step_key == 'frame':
-                    render_frame_preview(result, doc)
-                elif step_key == 'legend':
-                    render_legend_preview(result)
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: CERTIFICATE CREATOR — fully independent, no editor state touched
+# ═════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_view == 'Certificate Creator':
 
-            if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True, type="primary"):
-                st.session_state.current_step += 1
-                st.rerun()
-
-# ── All steps done: download ────────────────────────────────────────────
-if st.session_state.current_step >= len(STEP_ORDER):
-    render_eyebrow("All steps complete")
-    out_bytes = doc.tobytes()
-    out_name  = st.session_state.file_name.replace('.pdf', '_processed.pdf')
-    st.download_button(
-        label="Download annotated PDF",
-        data=out_bytes,
-        file_name=out_name,
-        mime="application/pdf",
-        use_container_width=True,
+    render_eyebrow("Upload quote")
+    cert_uploaded = st.file_uploader(
+        "Drop a quote PDF here", type="pdf", label_visibility="collapsed", key="cert_uploader"
     )
+
+    if cert_uploaded is not None and st.session_state.get('cert_uploaded_file_id') != cert_uploaded.file_id:
+        st.session_state.cert_uploaded_file_id = cert_uploaded.file_id
+        st.session_state.cert_quote_bytes      = cert_uploaded.read()
+        st.session_state.cert_client           = ''
+        st.session_state.cert_site             = ''
+        st.session_state.cert_date             = ''
+
+    if st.session_state.get('cert_quote_bytes') is None:
+        st.stop()
+
+    if st.button("Scan quote", type="primary", use_container_width=True):
+        quote_doc = fitz.open(stream=st.session_state.cert_quote_bytes, filetype="pdf")
+        try:
+            detected = extract_quote_data(quote_doc)
+        except NotImplementedError:
+            detected = {}
+            st.info("Quote scanning isn't built yet- fill in the fields below by hand.")
+        quote_doc.close()
+        st.session_state.cert_client = detected.get('client', '') or ''
+        st.session_state.cert_site   = detected.get('site', '') or ''
+        st.session_state.cert_date   = detected.get('date', '') or ''
+
+    render_eyebrow("Detected fields- edit if needed")
+    st.session_state.cert_client = st.text_input("Client", value=st.session_state.get('cert_client', ''))
+    st.session_state.cert_site   = st.text_input("Site", value=st.session_state.get('cert_site', ''))
+    st.session_state.cert_date   = st.text_input("Date", value=st.session_state.get('cert_date', ''))
+
+    st.markdown("---")
+
+    if st.button("Generate certificate", type="primary", use_container_width=True):
+        if not os.path.exists(CERTIFICATE_TEMPLATE_PATH):
+            st.error("Certificate template not found in the app folder.")
+        else:
+            with open(CERTIFICATE_TEMPLATE_PATH, "rb") as f:
+                template_bytes = f.read()
+            filled_bytes = fill_certificate(template_bytes, {
+                'client': st.session_state.cert_client,
+                'site':   st.session_state.cert_site,
+                'date':   st.session_state.cert_date,
+            })
+            st.download_button(
+                "Download certificate",
+                data=filled_bytes,
+                file_name="Glass_Compliance_Certificate.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
