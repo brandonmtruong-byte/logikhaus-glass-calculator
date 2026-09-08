@@ -218,7 +218,7 @@ if st.session_state.active_view == 'PDF Modifier':
         with st.spinner('Loading glass data from sheet...'):
             glass_lookup      = load_glass_lookup()
             glass_type_lookup = load_glass_type_lookup()
-        st.markdown(f'<div class="status-box">✓ Glass database loaded -{len(glass_lookup)} codes</div>',
+        st.markdown(f'<div class="status-box">✓ Glass database loaded - {len(glass_lookup)} codes</div>',
                     unsafe_allow_html=True)
     except Exception as e:
         st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
@@ -423,17 +423,11 @@ elif st.session_state.active_view == 'Certificate Creator':
         "Drop a quote PDF here", type="pdf", label_visibility="collapsed", key="cert_uploader"
     )
 
+    # Auto-scan the moment a new quote is uploaded -- no button needed.
     if cert_uploaded is not None and st.session_state.get('cert_uploaded_file_id') != cert_uploaded.file_id:
         st.session_state.cert_uploaded_file_id = cert_uploaded.file_id
         st.session_state.cert_quote_bytes      = cert_uploaded.read()
-        st.session_state.cert_client           = ''
-        st.session_state.cert_site             = ''
-        st.session_state.cert_date             = ''
 
-    if st.session_state.get('cert_quote_bytes') is None:
-        st.stop()
-
-    if st.button("Scan quote", type="primary", use_container_width=True):
         quote_doc = fitz.open(stream=st.session_state.cert_quote_bytes, filetype="pdf")
         try:
             detected = extract_quote_data(quote_doc)
@@ -441,32 +435,45 @@ elif st.session_state.active_view == 'Certificate Creator':
             detected = {}
             st.info("Quote scanning isn't built yet- fill in the fields below by hand.")
         quote_doc.close()
-        st.session_state.cert_client = detected.get('client', '') or ''
-        st.session_state.cert_site   = detected.get('site', '') or ''
-        st.session_state.cert_date   = detected.get('date', '') or ''
+
+        st.session_state.cert_client       = detected.get('client', '') or ''
+        st.session_state.cert_site         = detected.get('site', '') or ''
+        st.session_state.cert_date         = detected.get('date', '') or ''
+        st.session_state.cert_completed_on = ''  # never auto-detected -- always left for manual entry
+
+    if st.session_state.get('cert_quote_bytes') is None:
+        st.stop()
 
     render_eyebrow("Detected fields- edit if needed")
-    st.session_state.cert_client = st.text_input("Client", value=st.session_state.get('cert_client', ''))
-    st.session_state.cert_site   = st.text_input("Site", value=st.session_state.get('cert_site', ''))
-    st.session_state.cert_date   = st.text_input("Date", value=st.session_state.get('cert_date', ''))
+    st.session_state.cert_client       = st.text_input("Client", value=st.session_state.get('cert_client', ''))
+    st.session_state.cert_site         = st.text_input("Site", value=st.session_state.get('cert_site', ''))
+    st.session_state.cert_completed_on = st.text_input(
+        "Completed on", value=st.session_state.get('cert_completed_on', '')
+    )
+    st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
 
     st.markdown("---")
 
-    if st.button("Generate certificate", type="primary", use_container_width=True):
-        if not os.path.exists(CERTIFICATE_TEMPLATE_PATH):
-            st.error("Certificate template not found in the app folder.")
-        else:
-            with open(CERTIFICATE_TEMPLATE_PATH, "rb") as f:
-                template_bytes = f.read()
-            filled_bytes = fill_certificate(template_bytes, {
-                'client': st.session_state.cert_client,
-                'site':   st.session_state.cert_site,
-                'date':   st.session_state.cert_date,
-            })
-            st.download_button(
-                "Download certificate",
-                data=filled_bytes,
-                file_name="Glass_Compliance_Certificate.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+    # Generate + download in one click: the filled PDF is (cheaply)
+    # rebuilt from whatever's currently in the fields on every rerun, so
+    # it's always ready the instant this button renders -- no separate
+    # "Generate" step before the download becomes available.
+    if os.path.exists(CERTIFICATE_TEMPLATE_PATH):
+        with open(CERTIFICATE_TEMPLATE_PATH, "rb") as f:
+            template_bytes = f.read()
+        filled_bytes = fill_certificate(template_bytes, {
+            'client':       st.session_state.cert_client,
+            'site':         st.session_state.cert_site,
+            'completed_on': st.session_state.cert_completed_on,
+            'date':         st.session_state.cert_date,
+        })
+        st.download_button(
+            "Generate and download certificate",
+            data=filled_bytes,
+            file_name="Glass_Compliance_Certificate.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+    else:
+        st.error("Certificate template not found in the app folder.")

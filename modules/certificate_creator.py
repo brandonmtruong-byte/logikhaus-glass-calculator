@@ -16,6 +16,7 @@ generic/auto-generated and don't match their on-page labels):
     ----------------------------------  --------------
     Client:                             Text Field 1
     Site:                                Text Field 2
+    Completed on:                        Text Field 3  (always left blank -- not auto-detected)
     Date: (bottom signature date)        Text Field 6
 
 Everything else on the template (company/AGWA number, description of
@@ -38,9 +39,10 @@ from pypdf import PdfReader, PdfWriter
 # names, so the rest of the code can talk about "client"/"site"/"date"
 # instead of remembering "Text Field 1" vs "Text Field 2" by heart.
 CERT_FIELD_MAP = {
-    'client': 'Text Field 1',
-    'site':   'Text Field 2',
-    'date':   'Text Field 6',
+    'client':       'Text Field 1',
+    'site':         'Text Field 2',
+    'completed_on': 'Text Field 3',
+    'date':         'Text Field 6',
 }
 
 
