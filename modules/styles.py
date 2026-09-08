@@ -168,6 +168,7 @@ CUSTOM_CSS = """
         font-size: 14px !important;
         padding: 8px 4px !important;
         box-shadow: none !important;
+        border-bottom: 2px solid #3a3d45 !important;
     }
     div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button[kind="primary"],
     div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button[kind="primary"] {
