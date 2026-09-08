@@ -218,7 +218,7 @@ if st.session_state.active_view == 'PDF Modifier':
         with st.spinner('Loading glass data from sheet...'):
             glass_lookup      = load_glass_lookup()
             glass_type_lookup = load_glass_type_lookup()
-        st.markdown(f'<div class="status-box">✓ Glass database loaded- {len(glass_lookup)} codes</div>',
+        st.markdown(f'<div class="status-box">✓ Glass database loaded -{len(glass_lookup)} codes</div>',
                     unsafe_allow_html=True)
     except Exception as e:
         st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
@@ -232,7 +232,7 @@ if st.session_state.active_view == 'PDF Modifier':
             frame_codes = load_frame_codes()
             frame_rules = load_frame_rules()
         st.markdown(
-            f'<div class="status-box">✓ Frame code data loaded- '
+            f'<div class="status-box">✓ Frame code data loaded - '
             f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
             unsafe_allow_html=True
         )
