@@ -9,6 +9,10 @@ CUSTOM_CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
+    html {
+        overflow-y: scroll;
+    }
+
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
     .block-container { padding-top: 2.5rem; max-width: 760px; }
