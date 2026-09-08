@@ -35,19 +35,21 @@ if 'active_view' not in st.session_state:
 
 col_view1, col_view2 = st.columns(2)
 with col_view1:
-    if st.button(
-        "PDF Editor", use_container_width=True,
-        type="primary" if st.session_state.active_view == 'PDF Modifier' else "secondary",
-    ):
-        st.session_state.active_view = 'PDF Modifier'
-        st.rerun()
+    with st.container(key="tab_pdf_modifier"):
+        if st.button(
+            "PDF Editor", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'PDF Modifier' else "secondary",
+        ):
+            st.session_state.active_view = 'PDF Modifier'
+            st.rerun()
 with col_view2:
-    if st.button(
-        "Certificate Creator", use_container_width=True,
-        type="primary" if st.session_state.active_view == 'Certificate Creator' else "secondary",
-    ):
-        st.session_state.active_view = 'Certificate Creator'
-        st.rerun()
+    with st.container(key="tab_certificate_creator"):
+        if st.button(
+            "Certificate Creator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Certificate Creator' else "secondary",
+        ):
+            st.session_state.active_view = 'Certificate Creator'
+            st.rerun()
 
 st.markdown("---")
 
@@ -444,7 +446,7 @@ elif st.session_state.active_view == 'Certificate Creator':
     if st.session_state.get('cert_quote_bytes') is None:
         st.stop()
 
-    render_eyebrow("Detected fields- edit if needed")
+    render_eyebrow("Detected fields - edit if needed")
     st.session_state.cert_client       = st.text_input("Client", value=st.session_state.get('cert_client', ''))
     st.session_state.cert_site         = st.text_input("Site", value=st.session_state.get('cert_site', ''))
     st.session_state.cert_completed_on = st.text_input(

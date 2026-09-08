@@ -9,6 +9,11 @@ CUSTOM_CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
+    /* Always reserve the vertical scrollbar's space, even on short pages.
+       Without this, switching between views of very different heights
+       (e.g. the tall PDF Modifier stepper vs the short Certificate
+       Creator form) makes the scrollbar appear/disappear, which shifts
+       centered content left/right by the scrollbar's width. */
     html {
         overflow-y: scroll;
     }
@@ -139,6 +144,35 @@ CUSTOM_CSS = """
     }
     div[data-testid="stButton"] button[kind="secondary"]:hover {
         background: rgba(255,255,255,0.05) !important; color: #d0d2d8 !important;
+    }
+
+    /* View switcher (PDF Editor / Certificate Creator) -- plain text
+       tabs with an underline on the active one, NOT styled like the
+       filled/outlined action buttons above (Apply, Skip, Continue...).
+       Scoped to these two specific keyed containers only, so it can't
+       leak onto any other button in the app. */
+    div[class*="st-key-tab_pdf_modifier"] button,
+    div[class*="st-key-tab_certificate_creator"] button {
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        border-bottom: 2px solid transparent !important;
+        color: #7a7d85 !important;
+        font-weight: 500 !important;
+        font-size: 14px !important;
+        padding: 8px 4px !important;
+        box-shadow: none !important;
+    }
+    div[class*="st-key-tab_pdf_modifier"] button[kind="primary"],
+    div[class*="st-key-tab_certificate_creator"] button[kind="primary"] {
+        color: #f0f0f2 !important;
+        font-weight: 600 !important;
+        border-bottom: 2px solid #8B1A1A !important;
+    }
+    div[class*="st-key-tab_pdf_modifier"] button:hover,
+    div[class*="st-key-tab_certificate_creator"] button:hover {
+        background: transparent !important;
+        color: #d0d2d8 !important;
     }
 </style>
 """
