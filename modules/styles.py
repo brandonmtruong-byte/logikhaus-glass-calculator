@@ -149,10 +149,16 @@ CUSTOM_CSS = """
     /* View switcher (PDF Editor / Certificate Creator) -- plain text
        tabs with an underline on the active one, NOT styled like the
        filled/outlined action buttons above (Apply, Skip, Continue...).
-       Scoped to these two specific keyed containers only, so it can't
-       leak onto any other button in the app. */
-    div[class*="st-key-tab_pdf_modifier"] button,
-    div[class*="st-key-tab_certificate_creator"] button {
+       The extra div[data-testid="stButton"] layer here isn't decorative
+       -- it makes this selector MORE specific than the general
+       button[kind="primary"] rule above, which is needed because equal
+       specificity + both using !important resolves by source order, and
+       Streamlit's own dynamically-injected styles can end up later in
+       the DOM than this stylesheet regardless of where it appears in
+       the code, silently winning ties. Genuinely higher specificity
+       wins no matter the injection order. */
+    div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button,
+    div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button {
         background: transparent !important;
         border: none !important;
         border-radius: 0 !important;
@@ -163,14 +169,14 @@ CUSTOM_CSS = """
         padding: 8px 4px !important;
         box-shadow: none !important;
     }
-    div[class*="st-key-tab_pdf_modifier"] button[kind="primary"],
-    div[class*="st-key-tab_certificate_creator"] button[kind="primary"] {
+    div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button[kind="primary"],
+    div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button[kind="primary"] {
         color: #f0f0f2 !important;
         font-weight: 600 !important;
-        border-bottom: 2px solid #8B1A1A !important;
+        border-bottom: 2px solid #A13336 !important;
     }
-    div[class*="st-key-tab_pdf_modifier"] button:hover,
-    div[class*="st-key-tab_certificate_creator"] button:hover {
+    div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button:hover,
+    div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button:hover {
         background: transparent !important;
         color: #d0d2d8 !important;
     }
