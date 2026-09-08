@@ -36,6 +36,9 @@ TEMPLATE_XLSX_PATH = os.path.join(BASE_DIR, "template_instructions.xlsx")
 # ── Test files (dev-only shortcut, not part of the stepper flow) ────────────
 TEST_FILES_DIR = os.path.join(BASE_DIR, "Test Files")
 
+# ── Certificate Creator (separate tab, independent of the stepper) ─────────
+CERTIFICATE_TEMPLATE_PATH = os.path.join(BASE_DIR, "2026_Glass_Compliance_Certificate.pdf")
+
 # Google Sheets API scopes used by every module that reads a sheet.
 GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
