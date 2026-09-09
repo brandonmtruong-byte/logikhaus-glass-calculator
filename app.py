@@ -6,9 +6,11 @@ import fitz
 from modules.styles import inject_css, render_header, render_eyebrow, render_step_row, render_active_step_header
 from modules.glass_weight import load_glass_lookup, load_glass_type_lookup
 from modules.frame_code_data import load_frame_codes, load_frame_rules
-from modules.config import TEMPLATE_XLSX_PATH, CERTIFICATE_TEMPLATE_PATH
+from modules.config import TEMPLATE_XLSX_PATH, CERTIFICATE_TEMPLATE_PATH, WINDOW_CERT_TEMPLATE_DG_PATH, WINDOW_CERT_TEMPLATE_TG_PATH
 from modules.test_files import list_test_files, load_test_file
-from modules.certificate_creator import extract_quote_data, fill_certificate
+from modules.certificate_creator import (
+    extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
+)
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
@@ -442,6 +444,14 @@ elif st.session_state.active_view == 'Certificate Creator':
         st.session_state.cert_site         = detected.get('site', '') or ''
         st.session_state.cert_date         = detected.get('date', '') or ''
         st.session_state.cert_completed_on = ''  # never auto-detected -- always left for manual entry
+        st.session_state.cert_delivered_on = ''  # same -- always left for manual entry
+
+        # Detected but not user-editable -- these drive the Window
+        # Compliance certificate's checkboxes and template choice
+        # directly, there's no free-text field for them in the UI.
+        st.session_state.cert_site_wind_rating = detected.get('site_wind_rating')
+        st.session_state.cert_bushfire_rating  = detected.get('bushfire_rating')
+        st.session_state.cert_glazing_type     = detected.get('glazing_type')
 
     if st.session_state.get('cert_quote_bytes') is None:
         st.stop()
@@ -451,6 +461,9 @@ elif st.session_state.active_view == 'Certificate Creator':
     st.session_state.cert_site         = st.text_input("Site", value=st.session_state.get('cert_site', ''))
     st.session_state.cert_completed_on = st.text_input(
         "Completed on", value=st.session_state.get('cert_completed_on', '')
+    )
+    st.session_state.cert_delivered_on = st.text_input(
+        "Delivered on", value=st.session_state.get('cert_delivered_on', '')
     )
     st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
 
@@ -470,7 +483,7 @@ elif st.session_state.active_view == 'Certificate Creator':
             'date':         st.session_state.cert_date,
         })
         st.download_button(
-            "Generate and download certificate",
+            "Generate and download Glass Compliance Certificate",
             data=filled_bytes,
             file_name="Glass_Compliance_Certificate.pdf",
             mime="application/pdf",
@@ -479,3 +492,29 @@ elif st.session_state.active_view == 'Certificate Creator':
         )
     else:
         st.error("Certificate template not found in the app folder.")
+
+    window_cert_path = pick_window_cert_template_path(
+        WINDOW_CERT_TEMPLATE_DG_PATH, WINDOW_CERT_TEMPLATE_TG_PATH,
+        st.session_state.get('cert_glazing_type'),
+    )
+    if os.path.exists(window_cert_path):
+        with open(window_cert_path, "rb") as f:
+            window_template_bytes = f.read()
+        window_filled_bytes = fill_window_certificate(window_template_bytes, {
+            'client':            st.session_state.cert_client,
+            'site':              st.session_state.cert_site,
+            'delivered_on':      st.session_state.cert_delivered_on,
+            'date':              st.session_state.cert_date,
+            'site_wind_rating':  st.session_state.get('cert_site_wind_rating'),
+            'bushfire_rating':   st.session_state.get('cert_bushfire_rating'),
+        })
+        st.download_button(
+            "Generate and download Window Compliance Certificate",
+            data=window_filled_bytes,
+            file_name="Window_Compliance_Certificate.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+    else:
+        st.error("Window Compliance Certificate template not found in the app folder.")

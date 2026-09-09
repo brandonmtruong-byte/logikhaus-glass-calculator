@@ -39,6 +39,12 @@ TEST_FILES_DIR = os.path.join(BASE_DIR, "Test Files")
 # ── Certificate Creator (separate tab, independent of the stepper) ─────────
 CERTIFICATE_TEMPLATE_PATH = os.path.join(BASE_DIR, "2026 Glass Compliance Certificate.pdf")
 
+# Two Window Compliance templates -- DG (double glazing) and TG (triple
+# glazing) -- picked between at runtime based on what extract_quote_data()
+# finds in the quote (see certificate_creator.pick_window_cert_template_path).
+WINDOW_CERT_TEMPLATE_DG_PATH = os.path.join(BASE_DIR, "Window Housing Compliance Certificate DG.pdf")
+WINDOW_CERT_TEMPLATE_TG_PATH = os.path.join(BASE_DIR, "Window Housing Compliance Certificate TG.pdf")
+
 # Google Sheets API scopes used by every module that reads a sheet.
 GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
