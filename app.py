@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 import pandas as pd
 import fitz
@@ -10,6 +11,7 @@ from modules.config import TEMPLATE_XLSX_PATH, CERTIFICATE_TEMPLATE_PATH, WINDOW
 from modules.test_files import list_test_files, load_test_file
 from modules.certificate_creator import (
     extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
+    WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP,
 )
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
@@ -210,6 +212,17 @@ def start_new_document(file_bytes, file_name, unique_id):
     st.session_state.current_step     = 0
     st.session_state.step_status      = {k: 'pending' for k in STEP_ORDER}
     st.session_state.step_results     = {}
+
+
+def sanitize_filename_part(text):
+    """
+    Strip characters that are invalid (or awkward) in a filename, for
+    building download filenames out of free text like a client name.
+    Collapses whitespace and trims, so "Caitlin & Chris  Morey" becomes
+    "Caitlin & Chris Morey" rather than leaving double spaces.
+    """
+    cleaned = re.sub(r'[<>:"/\\|?*]', '', text)
+    return re.sub(r'\s+', ' ', cleaned).strip()
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -467,6 +480,23 @@ elif st.session_state.active_view == 'Certificate Creator':
     )
     st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
 
+    # One-hot selections, same "prefilled but editable" idea as the text
+    # fields above -- a selectbox rather than free text since these must
+    # match one of the certificate's actual checkbox options exactly.
+    wind_options = list(WIND_RATING_CHECKBOX_MAP.keys())
+    detected_wind = st.session_state.get('cert_site_wind_rating')
+    wind_index = wind_options.index(detected_wind) if detected_wind in wind_options else 0
+    st.session_state.cert_site_wind_rating = st.selectbox(
+        "Site Wind Rating", wind_options, index=wind_index
+    )
+
+    bushfire_options = list(BUSHFIRE_CHECKBOX_MAP.keys())
+    detected_bushfire = st.session_state.get('cert_bushfire_rating')
+    bushfire_index = bushfire_options.index(detected_bushfire) if detected_bushfire in bushfire_options else 0
+    st.session_state.cert_bushfire_rating = st.selectbox(
+        "Bushfire Rating", bushfire_options, index=bushfire_index
+    )
+
     st.markdown("---")
 
     # Generate + download in one click: the filled PDF is (cheaply)
@@ -485,7 +515,7 @@ elif st.session_state.active_view == 'Certificate Creator':
         st.download_button(
             "Generate and download Glass Compliance Certificate",
             data=filled_bytes,
-            file_name="Glass_Compliance_Certificate.pdf",
+            file_name=f"Glass_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client)}.pdf",
             mime="application/pdf",
             type="primary",
             use_container_width=True,
@@ -511,7 +541,7 @@ elif st.session_state.active_view == 'Certificate Creator':
         st.download_button(
             "Generate and download Window Compliance Certificate",
             data=window_filled_bytes,
-            file_name="Window_Compliance_Certificate.pdf",
+            file_name=f"Window_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client)}.pdf",
             mime="application/pdf",
             type="primary",
             use_container_width=True,
