@@ -122,6 +122,12 @@ def extract_quote_data(doc):
 
     surname_match = re.search(r'Client:\s*(.+?)\s*\n', text)
     dear_match     = re.search(r'Dear\s+([^,]+),', text)
+    if surname_match:
+        # The raw value straight off the quote's own "Client:" line --
+        # kept separate from the combined 'client' display name below,
+        # since this is what filenames should use even if 'client' gets
+        # hand-edited afterward (e.g. "Morey", not "Caitlin & Chris Morey").
+        data['client_quote_field'] = surname_match.group(1).strip()
     if surname_match and dear_match:
         data['client'] = f"{dear_match.group(1).strip()} {surname_match.group(1).strip()}"
 

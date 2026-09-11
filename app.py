@@ -454,6 +454,10 @@ elif st.session_state.active_view == 'Certificate Creator':
         quote_doc.close()
 
         st.session_state.cert_client       = detected.get('client', '') or ''
+        # Kept separate from cert_client: this is the raw value straight
+        # off the quote's own "Client:" line, used for filenames so it
+        # stays correct even if the Client field above gets hand-edited.
+        st.session_state.cert_client_quote_field = detected.get('client_quote_field', '') or ''
         st.session_state.cert_site         = detected.get('site', '') or ''
         st.session_state.cert_date         = detected.get('date', '') or ''
         st.session_state.cert_completed_on = ''  # never auto-detected -- always left for manual entry
@@ -472,7 +476,17 @@ elif st.session_state.active_view == 'Certificate Creator':
     render_eyebrow("Detected fields - edit if needed")
     st.session_state.cert_client       = st.text_input("Client", value=st.session_state.get('cert_client', ''))
     st.session_state.cert_site         = st.text_input("Site", value=st.session_state.get('cert_site', ''))
+    st.session_state.cert_completed_on = st.text_input(
+        "Completed on", value=st.session_state.get('cert_completed_on', '')
+    )
+    st.session_state.cert_delivered_on = st.text_input(
+        "Delivered on", value=st.session_state.get('cert_delivered_on', '')
+    )
+    st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
 
+    # One-hot selections, same "prefilled but editable" idea as the text
+    # fields above -- a selectbox rather than free text since these must
+    # match one of the certificate's actual checkbox options exactly.
     wind_options = list(WIND_RATING_CHECKBOX_MAP.keys())
     detected_wind = st.session_state.get('cert_site_wind_rating')
     wind_index = wind_options.index(detected_wind) if detected_wind in wind_options else 0
@@ -486,14 +500,6 @@ elif st.session_state.active_view == 'Certificate Creator':
     st.session_state.cert_bushfire_rating = st.selectbox(
         "Bushfire Rating", bushfire_options, index=bushfire_index
     )
-
-    st.session_state.cert_completed_on = st.text_input(
-        "Completed on", value=st.session_state.get('cert_completed_on', '')
-    )
-    st.session_state.cert_delivered_on = st.text_input(
-        "Delivered on", value=st.session_state.get('cert_delivered_on', '')
-    )
-    st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
 
     st.markdown("---")
 
@@ -513,7 +519,7 @@ elif st.session_state.active_view == 'Certificate Creator':
         st.download_button(
             "Generate and download Glass Compliance Certificate",
             data=filled_bytes,
-            file_name=f"Glass_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client)}.pdf",
+            file_name=f"Glass_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client_quote_field)}.pdf",
             mime="application/pdf",
             type="primary",
             use_container_width=True,
@@ -539,7 +545,7 @@ elif st.session_state.active_view == 'Certificate Creator':
         st.download_button(
             "Generate and download Window Compliance Certificate",
             data=window_filled_bytes,
-            file_name=f"Window_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client)}.pdf",
+            file_name=f"Window_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client_quote_field)}.pdf",
             mime="application/pdf",
             type="primary",
             use_container_width=True,
