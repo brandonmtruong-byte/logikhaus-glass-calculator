@@ -517,6 +517,22 @@ elif st.session_state.active_view == 'Certificate Creator':
         "Bushfire Rating", bushfire_options, index=bushfire_index
     )
 
+    # Unlike the two groups above, "No Match" here can't just mean "leave
+    # it off" -- glazing type picks WHICH TEMPLATE FILE gets used, so
+    # there's no equivalent "generate anyway with nothing selected"
+    # option. Selecting "No Match" instead blocks the Window Compliance
+    # download specifically further down, with a clear message, rather
+    # than silently falling back to the DG template as it did before.
+    glazing_options = ['DG', 'TG', 'No Match']
+    detected_glazing = st.session_state.get('cert_glazing_type')
+    glazing_index = (
+        glazing_options.index(detected_glazing) if detected_glazing in glazing_options
+        else glazing_options.index('No Match')
+    )
+    st.session_state.cert_glazing_type = st.selectbox(
+        "Glazing Type", glazing_options, index=glazing_index
+    )
+
     st.session_state.cert_completed_on = st.text_input(
         "Completed on", value=st.session_state.get('cert_completed_on', '')
     )
@@ -554,28 +570,32 @@ elif st.session_state.active_view == 'Certificate Creator':
     else:
         st.error("Certificate template not found in the app folder.")
 
-    window_cert_path = pick_window_cert_template_path(
-        WINDOW_CERT_TEMPLATE_DG_PATH, WINDOW_CERT_TEMPLATE_TG_PATH,
-        st.session_state.get('cert_glazing_type'),
-    )
-    if os.path.exists(window_cert_path):
-        with open(window_cert_path, "rb") as f:
-            window_template_bytes = f.read()
-        window_filled_bytes = fill_window_certificate(window_template_bytes, {
-            'client':            st.session_state.cert_client,
-            'site':              st.session_state.cert_site,
-            'delivered_on':      st.session_state.cert_delivered_on,
-            'date':              st.session_state.cert_date,
-            'site_wind_rating':  st.session_state.get('cert_site_wind_rating'),
-            'bushfire_rating':   st.session_state.get('cert_bushfire_rating'),
-        })
-        st.download_button(
-            "Generate and download Window Compliance Certificate",
-            data=window_filled_bytes,
-            file_name=f"Window_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client_quote_field)}.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True,
-        )
+    glazing_selection = st.session_state.get('cert_glazing_type')
+    if glazing_selection == 'No Match':
+        st.warning("Select a Glazing Type (DG or TG) to generate the Window Compliance Certificate.")
     else:
-        st.error("Window Compliance Certificate template not found in the app folder.")
+        window_cert_path = pick_window_cert_template_path(
+            WINDOW_CERT_TEMPLATE_DG_PATH, WINDOW_CERT_TEMPLATE_TG_PATH,
+            glazing_selection,
+        )
+        if os.path.exists(window_cert_path):
+            with open(window_cert_path, "rb") as f:
+                window_template_bytes = f.read()
+            window_filled_bytes = fill_window_certificate(window_template_bytes, {
+                'client':            st.session_state.cert_client,
+                'site':              st.session_state.cert_site,
+                'delivered_on':      st.session_state.cert_delivered_on,
+                'date':              st.session_state.cert_date,
+                'site_wind_rating':  st.session_state.get('cert_site_wind_rating'),
+                'bushfire_rating':   st.session_state.get('cert_bushfire_rating'),
+            })
+            st.download_button(
+                "Generate and download Window Compliance Certificate",
+                data=window_filled_bytes,
+                file_name=f"Window_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client_quote_field)}.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+            )
+        else:
+            st.error("Window Compliance Certificate template not found in the app folder.")
