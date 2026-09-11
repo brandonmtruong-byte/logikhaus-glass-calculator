@@ -470,24 +470,49 @@ elif st.session_state.active_view == 'Certificate Creator':
         st.session_state.cert_bushfire_rating  = detected.get('bushfire_rating')
         st.session_state.cert_glazing_type     = detected.get('glazing_type')
 
+        # Tracked once at scan time, not re-derived from the (editable)
+        # fields below -- so a person clearing a field by hand afterward
+        # doesn't get mistaken for "the scan couldn't find this."
+        field_labels = {
+            'client':           'Client',
+            'site':             'Site',
+            'bushfire_rating':  'Bushfire Rating',
+            'site_wind_rating': 'Site Wind Rating',
+            'glazing_type':     'Glazing Type',
+        }
+        st.session_state.cert_missing_fields = [
+            label for key, label in field_labels.items() if not detected.get(key)
+        ]
+
     if st.session_state.get('cert_quote_bytes') is None:
         st.stop()
 
     render_eyebrow("Detected fields - edit if needed")
-    
     st.session_state.cert_client       = st.text_input("Client", value=st.session_state.get('cert_client', ''))
     st.session_state.cert_site         = st.text_input("Site", value=st.session_state.get('cert_site', ''))
 
-    wind_options = list(WIND_RATING_CHECKBOX_MAP.keys())
+    # One-hot selections, same "prefilled but editable" idea as the text
+    # fields above -- a selectbox rather than free text since these must
+    # match one of the certificate's actual checkbox options exactly.
+    # "No Match" is a genuine third state, not just a filler option: it
+    # tells fill_window_certificate() to leave the WHOLE group off
+    # rather than silently defaulting to N1/BAL LOW as if that had been
+    # confidently detected -- see WIND_RATING_CHECKBOX_MAP /
+    # BUSHFIRE_CHECKBOX_MAP, "No Match" isn't a key in either, so the
+    # one-hot loop there naturally sets every box in the group to /Off.
+    wind_options = list(WIND_RATING_CHECKBOX_MAP.keys()) + ['No Match']
     detected_wind = st.session_state.get('cert_site_wind_rating')
-    wind_index = wind_options.index(detected_wind) if detected_wind in wind_options else 0
+    wind_index = wind_options.index(detected_wind) if detected_wind in wind_options else wind_options.index('No Match')
     st.session_state.cert_site_wind_rating = st.selectbox(
         "Site Wind Rating", wind_options, index=wind_index
     )
 
-    bushfire_options = list(BUSHFIRE_CHECKBOX_MAP.keys())
+    bushfire_options = list(BUSHFIRE_CHECKBOX_MAP.keys()) + ['No Match']
     detected_bushfire = st.session_state.get('cert_bushfire_rating')
-    bushfire_index = bushfire_options.index(detected_bushfire) if detected_bushfire in bushfire_options else 0
+    bushfire_index = (
+        bushfire_options.index(detected_bushfire) if detected_bushfire in bushfire_options
+        else bushfire_options.index('No Match')
+    )
     st.session_state.cert_bushfire_rating = st.selectbox(
         "Bushfire Rating", bushfire_options, index=bushfire_index
     )
@@ -499,6 +524,9 @@ elif st.session_state.active_view == 'Certificate Creator':
         "Delivered on", value=st.session_state.get('cert_delivered_on', '')
     )
     st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
+
+    if st.session_state.get('cert_missing_fields'):
+        st.warning(f"Information not found for: {', '.join(st.session_state.cert_missing_fields)}")
 
     st.markdown("---")
 
