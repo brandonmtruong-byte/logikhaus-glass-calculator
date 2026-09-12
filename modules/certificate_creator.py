@@ -149,7 +149,7 @@ def extract_quote_data(doc):
     if bushfire_match:
         data['bushfire_rating'] = bushfire_match.group(1).strip().upper()
 
-    wind_match = re.search(r'Site Wind rating:\s*\n\s*(N\d+)', full_text)
+    wind_match = re.search(r'Wind rating:\s*\n\s*(N\d+)', full_text, re.IGNORECASE)
     if wind_match:
         data['site_wind_rating'] = wind_match.group(1).strip().upper()
 
@@ -168,6 +168,37 @@ def extract_quote_data(doc):
         data['glazing_type'] = 'DG'
 
     return data
+
+
+def debug_quote_extraction(doc):
+    """
+    Runs the exact same regexes as extract_quote_data(), but returns the
+    RAW matched text for each one (or None if it didn't match at all)
+    instead of the cleaned-up final values -- lets you see precisely
+    what the reader is seeing before any cleanup/joining happens, which
+    is usually the fastest way to tell "the field genuinely isn't on
+    this quote" apart from "the regex didn't match this quote's layout."
+
+    Returns a dict with keys: 'client_line', 'dear_line', 'project_block',
+    'site_wind_line', 'bushfire_line' -- each either the raw matched
+    string or None.
+    """
+    text = doc[0].get_text()
+    full_text = '\n'.join(page.get_text() for page in doc)
+
+    surname_match  = re.search(r'Client:\s*(.+?)\s*\n', text)
+    dear_match     = re.search(r'Dear\s+([^,]+),', text)
+    project_match  = re.search(r'Project:\s*(.*?)\nW\s+www\.logikhaus', text, re.DOTALL)
+    wind_match     = re.search(r'Wind rating:\s*\n\s*(N\d+)', full_text, re.IGNORECASE)
+    bushfire_match = re.search(r'Bushfire rating:\s*\n\s*(.+?)\s*\n', full_text)
+
+    return {
+        'client_line':    surname_match.group(0) if surname_match else None,
+        'dear_line':      dear_match.group(0) if dear_match else None,
+        'project_block':  project_match.group(1) if project_match else None,
+        'site_wind_line': wind_match.group(0) if wind_match else None,
+        'bushfire_line':  bushfire_match.group(0) if bushfire_match else None,
+    }
 
 
 def fill_certificate(template_bytes, data):

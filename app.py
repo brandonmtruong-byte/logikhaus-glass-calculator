@@ -11,7 +11,7 @@ from modules.config import TEMPLATE_XLSX_PATH, CERTIFICATE_TEMPLATE_PATH, WINDOW
 from modules.test_files import list_test_files, load_test_file
 from modules.certificate_creator import (
     extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
-    WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP,
+    WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP, debug_quote_extraction,
 )
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
@@ -451,6 +451,7 @@ elif st.session_state.active_view == 'Certificate Creator':
         except NotImplementedError:
             detected = {}
             st.info("Quote scanning isn't built yet- fill in the fields below by hand.")
+        st.session_state.cert_debug_extraction = debug_quote_extraction(quote_doc)
         quote_doc.close()
 
         st.session_state.cert_client       = detected.get('client', '') or ''
@@ -543,6 +544,24 @@ elif st.session_state.active_view == 'Certificate Creator':
 
     if st.session_state.get('cert_missing_fields'):
         st.warning(f"Information not found for: {', '.join(st.session_state.cert_missing_fields)}")
+
+    debug_info = st.session_state.get('cert_debug_extraction')
+    if debug_info:
+        with st.expander("Debug: what the reader found for each field"):
+            debug_labels = {
+                'client_line':    'Client',
+                'dear_line':      'Dear',
+                'project_block':  'Project',
+                'site_wind_line': 'Wind rating',
+                'bushfire_line':  'Bushfire rating',
+            }
+            for key, label in debug_labels.items():
+                value = debug_info.get(key)
+                if value:
+                    st.write(f"**{label}:**")
+                    st.code(value, language=None)
+                else:
+                    st.write(f"**{label}:** not found")
 
     st.markdown("---")
 
