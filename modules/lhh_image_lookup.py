@@ -149,18 +149,23 @@ def download_drive_image(file_id):
 
 def build_code_to_file_id_map(drive_images):
     """
-    {filename: file_id} -> {code: file_id}, matching on the part of each
-    filename before its first underscore (e.g. "LHH001_Roto_non-keyed.png"
-    -> code "LHH001"). Everything after the first underscore, including
-    the extension, is ignored -- there's exactly one image per code, so
-    the first match for a given code wins if the folder somehow has more
-    than one file with the same prefix.
+    {filename: file_id} -> {code: file_id}, extracted by regex-matching
+    the LHH### pattern at the START of each filename -- not by splitting
+    on a specific delimiter. Filenames in the wild have used both
+    underscores ("LHH001_Roto_non-keyed.png") and spaces
+    ("LHH001 Roto non-keyed R01.1.png"); matching the code pattern
+    directly works for either without caring which separator (if any)
+    follows it. There's exactly one image per code, so the first match
+    for a given code wins if the folder somehow has more than one file
+    with the same prefix.
     """
     code_map = {}
     for filename, file_id in drive_images.items():
-        code = filename.split('_', 1)[0]
-        if code and code not in code_map:
-            code_map[code] = file_id
+        match = re.match(LHH_CODE_PATTERN, filename, re.IGNORECASE)
+        if match:
+            code = match.group(0).upper()
+            if code not in code_map:
+                code_map[code] = file_id
     return code_map
 
 
