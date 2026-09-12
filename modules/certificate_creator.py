@@ -162,9 +162,19 @@ def extract_quote_data(doc):
     options_match = re.search(r'Options\s*\n(.*?)Sub Total:', full_text, re.DOTALL)
     options_text = options_match.group(1) if options_match else ''
 
-    if re.search(r'triple\s+glazing', options_text, re.IGNORECASE):
+    # Allow one word of slack between "triple"/"double" and "glazing"
+    # (e.g. "triple double glazing") so a compound phrase still counts
+    # as mentioning both -- then, if BOTH genuinely match, whichever one
+    # appears FIRST (leftmost) in the text wins, rather than always
+    # favouring triple regardless of position.
+    triple_match = re.search(r'triple\s+(?:\w+\s+)?glazing', options_text, re.IGNORECASE)
+    double_match = re.search(r'double\s+(?:\w+\s+)?glazing', options_text, re.IGNORECASE)
+
+    if triple_match and double_match:
+        data['glazing_type'] = 'TG' if triple_match.start() <= double_match.start() else 'DG'
+    elif triple_match:
         data['glazing_type'] = 'TG'
-    elif re.search(r'double\s+glazing', options_text, re.IGNORECASE):
+    elif double_match:
         data['glazing_type'] = 'DG'
 
     return data
