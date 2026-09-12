@@ -20,7 +20,7 @@ from modules.steps import (
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus Glass Calculator",
+    page_title="Logikhaus PDFixr",
     page_icon="🪟",
     layout="centered"
 )
