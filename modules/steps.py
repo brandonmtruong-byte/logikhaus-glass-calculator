@@ -26,15 +26,17 @@ from .glass_weight import process_glass_weights
 from .frame_code_matcher import process_frame_codes, group_rules_by_category
 from .legend_page import append_legend_page
 from .schedule_editor import apply_text_replace
+from .lhh_image_lookup import find_all_lhh_codes_in_doc, load_lhh_lookup, list_drive_images, build_hardware_schedule
 
-STEP_ORDER = ['logo', 'text_replace', 'mass', 'frame', 'legend']
+STEP_ORDER = ['logo', 'text_replace', 'mass', 'frame', 'hardware_schedule', 'legend']
 
 STEP_LABELS = {
-    'logo':         'Logo Stamp',
-    'text_replace': 'Schedule Text Editor',
-    'mass':         'Glass Weight Calculator',
-    'frame':        'Frame Code Matcher',
-    'legend':       'Legend Page',
+    'logo':              'Logo Stamp',
+    'text_replace':      'Schedule Text Editor',
+    'mass':              'Glass Weight Calculator',
+    'frame':             'Frame Code Matcher',
+    'hardware_schedule': 'Hardware Schedule',
+    'legend':            'Legend Page',
 }
 
 
@@ -87,6 +89,36 @@ def apply_frame(doc, frame_codes, frame_rules, glass_type_lookup):
             highlight_rects[i] = rects
         rows.extend(page_rows)
     return {'rows': rows, 'pages': pages, 'highlight_rects': highlight_rects}
+
+
+def apply_hardware_schedule(doc):
+    """
+    Scan the whole working document for LHH### codes, look each one up
+    (sheet + Drive image), and append the resulting Hardware Schedule
+    pages to the end of `doc`. Runs after Frame Codes and before Legend,
+    so the schedule ends up sandwiched between the annotated
+    schedule/quote content and the Legend page that gets appended after
+    it.
+
+    Returns {'codes': sorted list of codes found, 'pages_added': int}
+    for the UI to show as a result -- there's no per-item "rows" table
+    the way Mass/Frame have, since the generated pages themselves ARE
+    the output to review (via the page-image preview toggle, same
+    pattern as the other steps).
+    """
+    codes = find_all_lhh_codes_in_doc(doc)
+    if not codes:
+        return {'codes': [], 'pages_added': 0}
+
+    lookup = load_lhh_lookup()
+    drive_images = list_drive_images()
+
+    schedule_doc = build_hardware_schedule(codes, lookup, drive_images)
+    pages_added = schedule_doc.page_count
+    doc.insert_pdf(schedule_doc)
+    schedule_doc.close()
+
+    return {'codes': codes, 'pages_added': pages_added}
 
 
 def apply_legend(doc):

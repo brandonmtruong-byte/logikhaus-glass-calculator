@@ -15,12 +15,12 @@ from modules.certificate_creator import (
 )
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
-    apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
+    apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
 )
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDFixr",
+    page_title="Logikhaus Glass Calculator",
     page_icon="🪟",
     layout="centered"
 )
@@ -186,6 +186,28 @@ def render_text_replace_preview(result):
         if show_images:
             for pno in sorted(result["preview_images"]):
                 st.image(result["preview_images"][pno], caption=f"Page {pno}", use_container_width=True)
+
+
+def render_hardware_schedule_preview(result, doc):
+    codes = result.get('codes', [])
+    pages_added = result.get('pages_added', 0)
+    if not codes:
+        st.info("No LHH codes found on this document.")
+        return
+    st.write(f"Found {len(codes)} hardware code(s): {', '.join(codes)}")
+    if pages_added:
+        show_images = st.toggle(
+            f"Show preview of {pages_added} generated page(s)", value=False, key="hardware_schedule_show_images"
+        )
+        if show_images:
+            # These are brand-new appended pages, not stamps on existing
+            # ones -- safe to render straight from the real doc, no
+            # throwaway copy needed since nothing extra gets drawn here.
+            total_pages = doc.page_count
+            start_page = total_pages - pages_added + 1
+            for pno in range(start_page, total_pages + 1):
+                pix = doc[pno - 1].get_pixmap(dpi=150)
+                st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
 
 
 def render_legend_preview(status):
@@ -384,6 +406,8 @@ if st.session_state.active_view == 'PDF Modifier':
                             st.session_state.step_results[step_key] = apply_frame(
                                 doc, frame_codes, frame_rules, glass_type_lookup
                             )
+                        elif step_key == 'hardware_schedule':
+                            st.session_state.step_results[step_key] = apply_hardware_schedule(doc)
                         elif step_key == 'legend':
                             st.session_state.step_results[step_key] = apply_legend(doc)
                     st.session_state.step_status[step_key] = 'applied'
@@ -409,6 +433,8 @@ if st.session_state.active_view == 'PDF Modifier':
                         render_mass_preview(result, doc)
                     elif step_key == 'frame':
                         render_frame_preview(result, doc)
+                    elif step_key == 'hardware_schedule':
+                        render_hardware_schedule_preview(result, doc)
                     elif step_key == 'legend':
                         render_legend_preview(result)
 

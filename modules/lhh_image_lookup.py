@@ -1,25 +1,23 @@
 """
-MODULE — LHH CODE IMAGE LOOKUP
-Reads LHH### codes off a quote, looks each one up in the LHH lookup sheet,
-and pulls the matching image from a shared Google Drive folder so it can
-be dropped into a table on the PDF.
+LHH HARDWARE SCHEDULE
+Scans the working document for every LHH### code mentioned anywhere on
+it, looks each one up in the LHH lookup sheet, finds its matching image
+in the shared Drive folder, and builds a Hardware Schedule (using
+hardware_schedule_layout.py's template) that gets appended to the end
+of the document -- see modules/steps.py's apply_hardware_schedule(),
+which runs this as the step right before Legend in the stepper.
 
-STATUS: infrastructure only, two pieces are intentionally left as
-placeholders until they're decided:
+Sheet layout (row 1 is always the header; confirmed fixed, no guide
+rows above it):
+    Code | Names | Colour | Description
+Columns are found by matching the header text, not by a hardcoded
+column letter, so it doesn't matter which literal spreadsheet column
+each one lives in as long as row 1 has these exact labels somewhere on
+it. Rows where the Code cell is blank are skipped.
 
-  1. LHH_SHEET layout — load_lhh_lookup() doesn't know the sheet's real
-     columns yet. Once the layout exists, rewrite it to return a proper
-     {code: {...fields...}} dict, following the same pattern as
-     modules/glass_weight.py's load_glass_lookup().
-
-  2. The PDF table itself — build_image_table() is a no-op for now.
-     Once the template exists, fill it in to place each looked-up image
-     (+ description, if the sheet ends up having one) into the table.
-
-Everything else here (sheet connection, Drive folder connection, code
-extraction) is real and working — you can call load_lhh_lookup(),
-list_drive_images(), download_drive_image(), and extract_lhh_codes()
-today to explore what's actually in the sheet/folder.
+Drive folder: one image per code, filename is "<CODE>_<anything>.ext"
+-- only the part before the first underscore is used to match a code;
+everything after it (and the file extension) is ignored.
 """
 
 import io
@@ -29,14 +27,26 @@ import streamlit as st
 import gspread
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+import fitz
 
 from .config import get_google_credentials
+from .hardware_schedule_layout import (
+    row_rects_for_page, fit_image_rect, ROWS_PER_PAGE, PAGE_WIDTH, PAGE_HEIGHT,
+    HEADER_HEIGHT, TABLE_TOP_Y, COL_HEADER_H, MARGIN_X, COL1_X0, COL2_X0, COL3_X0,
+)
 
-# ── Config (kept local to this module — nothing else needs these yet) ──────
+# ── Config (kept local to this module -- nothing else needs these) ─────────
 LHH_SHEET_ID        = '17j8CUbiV_w-wFTaEGIjN-BM-iaOrfb3a8UBZJMfWjVU'
 LHH_DRIVE_FOLDER_ID = '11gVQL1K1xrCm7j_UB7R_NqK63wqZTRtH'
 
 LHH_CODE_PATTERN = r'LHH\d+'
+
+HEADER_COLUMN_NAMES = {
+    'code':        'code',
+    'name':        'names',
+    'colour':      'colour',
+    'description': 'description',
+}
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -46,21 +56,44 @@ LHH_CODE_PATTERN = r'LHH\d+'
 @st.cache_data(ttl=300)
 def load_lhh_lookup():
     """
-    PLACEHOLDER — sheet column layout not finalised yet.
+    Read the LHH sheet and return {code: {'name', 'colour', 'description'}}.
 
-    For now this just opens the first worksheet and returns every row as
-    raw values, so you can print/inspect it and see the actual layout.
-    Once the columns are decided, replace the body with something like
-    load_glass_lookup() in modules/glass_weight.py: iterate rows, pull out
-    the LHH code + whatever fields the table template needs (image
-    filename/ID, description, ...), return a dict keyed by code, e.g.
-
-        lookup["LHH012"] = {"image_file": "LHH012.png", "description": "..."}
+    Row 1 is the header -- columns are matched by their header text
+    (case-insensitive), not a fixed column letter, so "Code"/"Names"/
+    "Colour"/"Description" can live in any column as long as they're
+    somewhere in row 1. Rows with a blank Code cell are skipped.
     """
     creds = get_google_credentials()
     gc = gspread.authorize(creds)
     ws = gc.open_by_key(LHH_SHEET_ID).sheet1
-    return ws.get_all_values()
+    rows = ws.get_all_values()
+    if not rows:
+        return {}
+
+    header = [cell.strip().lower() for cell in rows[0]]
+    col_index = {}
+    for key, header_name in HEADER_COLUMN_NAMES.items():
+        if header_name in header:
+            col_index[key] = header.index(header_name)
+
+    if 'code' not in col_index:
+        return {}   # header row doesn't have a "Code" column at all -- nothing to read
+
+    lookup = {}
+    for row in rows[1:]:
+        def cell(key):
+            idx = col_index.get(key)
+            return row[idx].strip() if idx is not None and idx < len(row) else ''
+
+        code = cell('code')
+        if not code:
+            continue   # blank row -- skip
+        lookup[code] = {
+            'name':        cell('name'),
+            'colour':      cell('colour'),
+            'description': cell('description'),
+        }
+    return lookup
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -77,11 +110,9 @@ def _drive_service():
 def list_drive_images():
     """
     Return {filename: file_id} for every image file in the shared Drive
-    folder. Used to match whatever the sheet points to (a filename? the
-    code itself?) to an actual file to download.
-
-    The service account must have the folder shared with it (view access
-    is enough) — same account used for the Sheets connections.
+    folder. The service account must have the folder shared with it
+    (view access is enough) -- same account used for the Sheets
+    connections.
     """
     service = _drive_service()
     query = (
@@ -116,33 +147,128 @@ def download_drive_image(file_id):
     return buffer.getvalue()
 
 
+def build_code_to_file_id_map(drive_images):
+    """
+    {filename: file_id} -> {code: file_id}, matching on the part of each
+    filename before its first underscore (e.g. "LHH001_Roto_non-keyed.png"
+    -> code "LHH001"). Everything after the first underscore, including
+    the extension, is ignored -- there's exactly one image per code, so
+    the first match for a given code wins if the folder somehow has more
+    than one file with the same prefix.
+    """
+    code_map = {}
+    for filename, file_id in drive_images.items():
+        code = filename.split('_', 1)[0]
+        if code and code not in code_map:
+            code_map[code] = file_id
+    return code_map
+
+
 # ═════════════════════════════════════════════════════════════════════════
 #  CODE EXTRACTION
 # ═════════════════════════════════════════════════════════════════════════
 
-def extract_lhh_codes(block_text):
-    """Find every LHH### code mentioned in a window's block text."""
-    return re.findall(LHH_CODE_PATTERN, block_text)
+def extract_lhh_codes(text):
+    """Find every LHH### code mentioned in a chunk of text."""
+    return re.findall(LHH_CODE_PATTERN, text)
+
+
+def find_all_lhh_codes_in_doc(doc):
+    """
+    Scan every page of the working document for LHH codes and return the
+    sorted, de-duplicated list -- the schedule shows each code once,
+    regardless of how many times it's mentioned across the document.
+    """
+    codes = set()
+    for page in doc:
+        codes.update(extract_lhh_codes(page.get_text()))
+    return sorted(codes)
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  PDF TABLE BUILD — PLACEHOLDER
+#  SCHEDULE GENERATION
 # ═════════════════════════════════════════════════════════════════════════
 
-def build_image_table(page, lhh_codes, lhh_lookup, drive_images):
+def _new_schedule_page(doc):
     """
-    PLACEHOLDER — not built yet, waiting on the table template design.
-
-    Once the template exists, this should, for each code in lhh_codes:
-      1. Look up its image filename/ID (+ description, if any) in
-         lhh_lookup.
-      2. Find the matching file_id in drive_images and download it via
-         download_drive_image().
-      3. Insert the image (and description) into the table template at
-         the right position on `page`.
-
-    Left as a no-op for now so the rest of the pipeline can be wired up
-    and tested (sheet connection, Drive connection, code extraction)
-    before the table itself is ready.
+    Add one fresh Hardware Schedule page (header band + column labels +
+    empty row grid) to `doc`, matching hardware_schedule_template.pdf's
+    design exactly but drawn directly rather than requiring that file to
+    exist on disk -- keeps this module self-contained.
     """
-    pass
+    page = doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+
+    page.draw_rect(fitz.Rect(0, 0, PAGE_WIDTH, HEADER_HEIGHT), color=None, fill=(0.63, 0.20, 0.21))
+    page.insert_text((MARGIN_X, 45), 'Logikhaus', fontsize=22, fontname='hebo', color=(1, 1, 1))
+    page.insert_text((MARGIN_X, 68), 'Hardware Schedule', fontsize=11, fontname='helv', color=(1, 1, 1))
+
+    header_y = TABLE_TOP_Y
+    page.draw_rect(
+        fitz.Rect(MARGIN_X, header_y, PAGE_WIDTH - MARGIN_X, header_y + COL_HEADER_H),
+        color=(0.63, 0.20, 0.21), fill=(0.97, 0.94, 0.94), width=1,
+    )
+    page.insert_text((COL1_X0 + 6, header_y + 15), 'Code', fontsize=10, fontname='hebo', color=(0.2, 0.2, 0.2))
+    page.insert_text((COL2_X0 + 6, header_y + 15), 'Image', fontsize=10, fontname='hebo', color=(0.2, 0.2, 0.2))
+    page.insert_text((COL3_X0 + 6, header_y + 15), 'Description', fontsize=10, fontname='hebo', color=(0.2, 0.2, 0.2))
+
+    rows = row_rects_for_page()
+    for row in rows:
+        r = row['row_rect']
+        page.draw_rect(r, color=(0.7, 0.7, 0.7), width=0.75)
+        page.draw_line((COL2_X0, r.y0), (COL2_X0, r.y1), color=(0.7, 0.7, 0.7), width=0.75)
+        page.draw_line((COL3_X0, r.y0), (COL3_X0, r.y1), color=(0.7, 0.7, 0.7), width=0.75)
+
+    return page, rows
+
+
+def build_hardware_schedule(codes, lookup, drive_images):
+    """
+    Build the Hardware Schedule as a standalone fitz.Document -- one or
+    more pages, ROWS_PER_PAGE items per page, in the order `codes` is
+    given (find_all_lhh_codes_in_doc() already sorts them).
+
+    A code with no sheet entry still gets a row (just the code itself,
+    blank name/colour/description) rather than being silently dropped --
+    same "show the gap, don't hide it" principle as the Certificate
+    Creator's missing-fields handling. Same for a code with no matching
+    Drive image: the row just has no image rather than erroring out.
+
+    Returns the fitz.Document -- caller is responsible for closing it
+    (or inserting its pages into another doc and then closing it).
+    """
+    code_to_file_id = build_code_to_file_id_map(drive_images)
+    schedule_doc = fitz.open()
+
+    page, rows = _new_schedule_page(schedule_doc)
+    row_index = 0
+
+    for code in codes:
+        if row_index >= ROWS_PER_PAGE:
+            page, rows = _new_schedule_page(schedule_doc)
+            row_index = 0
+
+        layout = rows[row_index]
+        info = lookup.get(code, {})
+
+        page.insert_text(layout['code_origin'], code, fontsize=10, fontname='hebo', color=(0, 0, 0))
+        if info.get('name'):
+            page.insert_text(layout['name_origin'], info['name'], fontsize=8, fontname='helv', color=(0.2, 0.2, 0.2))
+
+        if info.get('colour'):
+            page.insert_text(layout['colour_origin'], info['colour'], fontsize=8, fontname='hebo', color=(0, 0, 0))
+        if info.get('description'):
+            page.insert_textbox(
+                layout['description_rect'], info['description'],
+                fontsize=8, fontname='helv', color=(0.2, 0.2, 0.2),
+            )
+
+        file_id = code_to_file_id.get(code)
+        if file_id:
+            image_bytes = download_drive_image(file_id)
+            pixmap = fitz.Pixmap(image_bytes)
+            img_rect = fit_image_rect(layout['image_box'], pixmap.width, pixmap.height)
+            page.insert_image(img_rect, stream=image_bytes)
+
+        row_index += 1
+
+    return schedule_doc
