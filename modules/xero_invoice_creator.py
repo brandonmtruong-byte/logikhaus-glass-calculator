@@ -76,19 +76,22 @@ def extract_windows_quote_info(doc):
 
 def extract_blinds_quote_info(doc):
     """
-    Returns {'price': ...} from a blinds/services quote (a fitz.Document)
-    -- the "Amount" column of its (single) line item, ex-GST. That's the
-    only piece actually used, since the blinds line's description is a
-    fixed string, not built from the quote's content.
+    Returns {'price': ...} from a blinds/services quote (a fitz.Document).
 
-    Assumes exactly one line item, matching every sample seen so far --
-    if a quote ever has more than one row, only the first is captured.
+    Reads the "Total inc GST" summary figure (always exactly one, right
+    before the Acceptance section, regardless of how many line items the
+    table has) and divides by 1.1 to back out the ex-GST price, rounded
+    to 2dp. Deliberately NOT reading the table's own "Amount" column --
+    that approach broke on quotes with more than one row (the regex
+    only ever captured the first row), where reading the single final
+    total instead always works regardless of row count.
     """
     text = doc[0].get_text()
     data = {}
-    amount_match = re.search(r'\d+\n[^\n$]+\n\$([\d,]+\.\d{2})', text)
-    if amount_match:
-        data['price'] = amount_match.group(1).replace(',', '')
+    total_match = re.search(r'Total inc GST\s*\n\$?([\d,]+\.\d{2})', text)
+    if total_match:
+        total_inc_gst = float(total_match.group(1).replace(',', ''))
+        data['price'] = f'{round(total_inc_gst / 1.1, 2):.2f}'
     return data
 
 
