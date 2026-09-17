@@ -697,6 +697,15 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
         st.info("Upload at least one quote, then click Process.")
         st.stop()
 
+    # Retract the whole output area the moment BOTH uploads are removed --
+    # e.g. mid-swap to a different file -- rather than leaving a stale
+    # result from an earlier Process click on screen. The stored result
+    # itself isn't cleared, just hidden; re-uploading and clicking
+    # Process again will show a fresh one as normal.
+    if windows_uploaded is None and blinds_uploaded is None:
+        st.info("Upload at least one quote, then click Process.")
+        st.stop()
+
     windows_info = st.session_state.get('xero_windows_info')
     blinds_info  = st.session_state.get('xero_blinds_info')
 
