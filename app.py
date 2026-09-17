@@ -17,10 +17,11 @@ from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
 )
+from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDFixr",
+    page_title="Logikhaus Glass Calculator",
     page_icon="🪟",
     layout="centered"
 )
@@ -37,7 +38,7 @@ render_header()
 if 'active_view' not in st.session_state:
     st.session_state.active_view = 'PDF Modifier'
 
-col_view1, col_view2 = st.columns(2)
+col_view1, col_view2, col_view3 = st.columns(3)
 with col_view1:
     with st.container(key="tab_pdf_modifier"):
         if st.button(
@@ -53,6 +54,14 @@ with col_view2:
             type="primary" if st.session_state.active_view == 'Certificate Creator' else "secondary",
         ):
             st.session_state.active_view = 'Certificate Creator'
+            st.rerun()
+with col_view3:
+    with st.container(key="tab_xero_invoice_creator"):
+        if st.button(
+            "Xero Invoice Creator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Xero Invoice Creator' else "secondary",
+        ):
+            st.session_state.active_view = 'Xero Invoice Creator'
             st.rerun()
 
 st.markdown("---")
@@ -644,3 +653,50 @@ elif st.session_state.active_view == 'Certificate Creator':
             )
         else:
             st.error("Window Compliance Certificate template not found in the app folder.")
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: XERO INVOICE CREATOR — fully independent, no other view's state touched
+# ═════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_view == 'Xero Invoice Creator':
+
+    render_eyebrow("Upload quotes")
+    col_w, col_b = st.columns(2)
+    with col_w:
+        windows_uploaded = st.file_uploader(
+            "Windows quote", type="pdf", key="xero_windows_uploader"
+        )
+    with col_b:
+        blinds_uploaded = st.file_uploader(
+            "Blinds quote", type="pdf", key="xero_blinds_uploader"
+        )
+
+    if windows_uploaded is None or blinds_uploaded is None:
+        st.info("Upload both quotes to generate the invoice text.")
+        st.stop()
+
+    windows_doc = fitz.open(stream=windows_uploaded.read(), filetype="pdf")
+    windows_info = extract_windows_quote_info(windows_doc)
+    windows_doc.close()
+
+    blinds_doc = fitz.open(stream=blinds_uploaded.read(), filetype="pdf")
+    blinds_info = extract_blinds_quote_info(blinds_doc)
+    blinds_doc.close()
+
+    missing = []
+    if not windows_info.get('client'):
+        missing.append('Client name (windows quote)')
+    if not windows_info.get('site'):
+        missing.append('Site address (windows quote)')
+    if not windows_info.get('price'):
+        missing.append('Sub Total (windows quote)')
+    if not blinds_info.get('price'):
+        missing.append('Amount (blinds quote)')
+    if missing:
+        st.warning(f"Information not found for: {', '.join(missing)}")
+
+    invoice_text = build_xero_invoice_text(windows_info, blinds_info)
+
+    st.markdown("---")
+    render_eyebrow("Generated invoice text")
+    st.code(invoice_text, language=None)
