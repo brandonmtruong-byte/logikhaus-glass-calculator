@@ -661,7 +661,7 @@ elif st.session_state.active_view == 'Certificate Creator':
 elif st.session_state.active_view == 'Xero Invoice Creator':
 
     render_eyebrow("Upload quotes")
-    st.caption("Either quote can be left out if that job type doesn't apply -- upload whichever you have.")
+    st.caption("Either quote can be left out if that job type doesn't apply - upload whichever you have.")
     col_w, col_b = st.columns(2)
     with col_w:
         windows_uploaded = st.file_uploader(
