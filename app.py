@@ -692,18 +692,26 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
 
         st.session_state.xero_windows_info = windows_info
         st.session_state.xero_blinds_info  = blinds_info
+        # Snapshot exactly which files were processed, by identity -- used
+        # below to detect ANY change (added, removed, or swapped for a
+        # different file) since this click, in either slot independently.
+        st.session_state.xero_processed_windows_id = windows_uploaded.file_id if windows_uploaded else None
+        st.session_state.xero_processed_blinds_id  = blinds_uploaded.file_id if blinds_uploaded else None
 
     if 'xero_windows_info' not in st.session_state and 'xero_blinds_info' not in st.session_state:
         st.info("Upload at least one quote, then click Process.")
         st.stop()
 
-    # Retract the whole output area the moment BOTH uploads are removed --
-    # e.g. mid-swap to a different file -- rather than leaving a stale
-    # result from an earlier Process click on screen. The stored result
-    # itself isn't cleared, just hidden; re-uploading and clicking
-    # Process again will show a fresh one as normal.
-    if windows_uploaded is None and blinds_uploaded is None:
-        st.info("Upload at least one quote, then click Process.")
+    # Retract the output the moment EITHER slot's current file no longer
+    # matches what was actually processed -- covers a file being removed,
+    # added, or swapped for a different one, in either slot independently.
+    # Merely changing what's uploaded never auto-regenerates the output;
+    # it only ever updates on an explicit Process click.
+    current_windows_id = windows_uploaded.file_id if windows_uploaded else None
+    current_blinds_id  = blinds_uploaded.file_id if blinds_uploaded else None
+    if (current_windows_id != st.session_state.get('xero_processed_windows_id')
+            or current_blinds_id != st.session_state.get('xero_processed_blinds_id')):
+        st.info("Quotes have changed since the last Process click -- click Process to update.")
         st.stop()
 
     windows_info = st.session_state.get('xero_windows_info')
