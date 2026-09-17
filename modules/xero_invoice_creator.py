@@ -49,7 +49,17 @@ def extract_windows_quote_info(doc):
     if surname_match and dear_match:
         data['client'] = f"{dear_match.group(1).strip()} {surname_match.group(1).strip()}"
 
+    # Try the footer-anchored boundary first (works when the page footer
+    # "W www.logikhaus..." happens to land AFTER Project: in the PDF's
+    # text-extraction order). If that finds nothing, fall back to the
+    # blank-line boundary instead -- PDF extraction order varies between
+    # quotes (sometimes the footer lands BEFORE Project: instead), but
+    # the address itself is always written as contiguous lines with no
+    # blank line in between, regardless of what surrounds it or in what
+    # order, so that's a reliable stopping point either way.
     project_match = re.search(r'Project:\s*(.*?)\nW\s+www\.logikhaus', text, re.DOTALL)
+    if not project_match:
+        project_match = re.search(r'Project:\s*(.*?)\n\s*\n', text, re.DOTALL)
     if project_match:
         lines = [ln.strip() for ln in project_match.group(1).splitlines()]
         lines = [ln for ln in lines if ln and not ln.isdigit()]
