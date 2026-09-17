@@ -711,7 +711,7 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
     current_blinds_id  = blinds_uploaded.file_id if blinds_uploaded else None
     if (current_windows_id != st.session_state.get('xero_processed_windows_id')
             or current_blinds_id != st.session_state.get('xero_processed_blinds_id')):
-        st.info("Quotes have changed since the last Process click -- click Process to update.")
+        st.info("Quotes have changed since the last Process click - click Process to update.")
         st.stop()
 
     windows_info = st.session_state.get('xero_windows_info')
