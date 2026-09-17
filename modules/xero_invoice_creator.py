@@ -82,38 +82,54 @@ def extract_blinds_quote_info(doc):
     return data
 
 
-def build_xero_invoice_text(windows_info, blinds_info):
+def build_xero_invoice_text(windows_info=None, blinds_info=None):
     """
-    Build the final paragraph from both extraction dicts. Any missing
-    piece renders as a visible [MISSING: ...] placeholder rather than a
-    blank or a crash, so a partial extraction is still obviously
-    actionable rather than silently wrong.
-    """
-    client        = windows_info.get('client') or '[MISSING: client name]'
-    site          = windows_info.get('site') or '[MISSING: site address]'
-    windows_price = windows_info.get('price') or '[MISSING: windows sub total]'
-    blinds_price  = blinds_info.get('price') or '[MISSING: blinds amount]'
+    Build the final paragraph from whichever quote(s) were actually
+    provided.
 
-    lines = [
-        '*' * 21,
-        'Contact:',
-        'Mr Blank',
-        '',
-        'With first item:',
-        f'60% deposit for windows and doors for {client} - {site}',
-        '',
-        f'Qty {DEPOSIT_QTY}',
-        f'Price ${windows_price}',
-        f'Account {WINDOWS_ACCOUNT}',
-        f'Tax rate {TAX_RATE}',
-        '',
-        '2nd item:',
-        '60% deposit for motorised external blinds',
-        f'Qty {DEPOSIT_QTY}',
-        f'Price ${blinds_price}',
-        f'Account {BLINDS_ACCOUNT}',
-        f'Tax rate {TAX_RATE}',
-        '',
-        '*' * 21,
-    ]
+    Pass None for a quote that simply wasn't uploaded at all -- that
+    item's whole section is OMITTED from the output, since "this job
+    has no blinds" (or no windows) isn't a data-extraction problem, it's
+    just not applicable.
+
+    Pass a dict (even an empty/partial one) for a quote that WAS
+    uploaded -- any field that couldn't be extracted from it renders as
+    a [MISSING: ...] placeholder instead, since that IS a genuine gap on
+    a document that does exist, worth flagging rather than silently
+    guessing or dropping.
+
+    If only the blinds quote is provided, its section is labelled "With
+    first item:" instead of "2nd item:", since it genuinely is the only
+    (and therefore first) item in that case.
+    """
+    lines = ['*' * 21, 'Contact:', 'Mr Blank']
+
+    if windows_info is not None:
+        client        = windows_info.get('client') or '[MISSING: client name]'
+        site          = windows_info.get('site') or '[MISSING: site address]'
+        windows_price = windows_info.get('price') or '[MISSING: windows sub total]'
+        lines += [
+            '',
+            'With first item:',
+            f'60% deposit for windows and doors for {client} - {site}',
+            '',
+            f'Qty {DEPOSIT_QTY}',
+            f'Price ${windows_price}',
+            f'Account {WINDOWS_ACCOUNT}',
+            f'Tax rate {TAX_RATE}',
+        ]
+
+    if blinds_info is not None:
+        blinds_price = blinds_info.get('price') or '[MISSING: blinds amount]'
+        lines += [
+            '',
+            '2nd item:' if windows_info is not None else 'With first item:',
+            '60% deposit for motorised external blinds',
+            f'Qty {DEPOSIT_QTY}',
+            f'Price ${blinds_price}',
+            f'Account {BLINDS_ACCOUNT}',
+            f'Tax rate {TAX_RATE}',
+        ]
+
+    lines += ['', '*' * 21]
     return '\n'.join(lines)

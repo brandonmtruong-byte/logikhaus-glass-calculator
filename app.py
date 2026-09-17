@@ -661,6 +661,7 @@ elif st.session_state.active_view == 'Certificate Creator':
 elif st.session_state.active_view == 'Xero Invoice Creator':
 
     render_eyebrow("Upload quotes")
+    st.caption("Either quote can be left out if that job type doesn't apply -- upload whichever you have.")
     col_w, col_b = st.columns(2)
     with col_w:
         windows_uploaded = st.file_uploader(
@@ -671,26 +672,46 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
             "Blinds quote", type="pdf", key="xero_blinds_uploader"
         )
 
-    if windows_uploaded is None or blinds_uploaded is None:
-        st.info("Upload both quotes to generate the invoice text.")
+    process_clicked = st.button(
+        "Process", type="primary", use_container_width=True,
+        disabled=(windows_uploaded is None and blinds_uploaded is None),
+    )
+
+    if process_clicked:
+        windows_info = None
+        if windows_uploaded is not None:
+            windows_doc = fitz.open(stream=windows_uploaded.read(), filetype="pdf")
+            windows_info = extract_windows_quote_info(windows_doc)
+            windows_doc.close()
+
+        blinds_info = None
+        if blinds_uploaded is not None:
+            blinds_doc = fitz.open(stream=blinds_uploaded.read(), filetype="pdf")
+            blinds_info = extract_blinds_quote_info(blinds_doc)
+            blinds_doc.close()
+
+        st.session_state.xero_windows_info = windows_info
+        st.session_state.xero_blinds_info  = blinds_info
+
+    if 'xero_windows_info' not in st.session_state and 'xero_blinds_info' not in st.session_state:
+        st.info("Upload at least one quote, then click Process.")
         st.stop()
 
-    windows_doc = fitz.open(stream=windows_uploaded.read(), filetype="pdf")
-    windows_info = extract_windows_quote_info(windows_doc)
-    windows_doc.close()
+    windows_info = st.session_state.get('xero_windows_info')
+    blinds_info  = st.session_state.get('xero_blinds_info')
 
-    blinds_doc = fitz.open(stream=blinds_uploaded.read(), filetype="pdf")
-    blinds_info = extract_blinds_quote_info(blinds_doc)
-    blinds_doc.close()
-
+    # A missing FIELD within a quote that WAS uploaded is a real gap,
+    # worth flagging -- unlike a quote that wasn't uploaded at all
+    # (handled by build_xero_invoice_text() simply omitting that item).
     missing = []
-    if not windows_info.get('client'):
-        missing.append('Client name (windows quote)')
-    if not windows_info.get('site'):
-        missing.append('Site address (windows quote)')
-    if not windows_info.get('price'):
-        missing.append('Sub Total (windows quote)')
-    if not blinds_info.get('price'):
+    if windows_info is not None:
+        if not windows_info.get('client'):
+            missing.append('Client name (windows quote)')
+        if not windows_info.get('site'):
+            missing.append('Site address (windows quote)')
+        if not windows_info.get('price'):
+            missing.append('Sub Total (windows quote)')
+    if blinds_info is not None and not blinds_info.get('price'):
         missing.append('Amount (blinds quote)')
     if missing:
         st.warning(f"Information not found for: {', '.join(missing)}")
