@@ -26,7 +26,7 @@ from .glass_weight import process_glass_weights
 from .frame_code_matcher import process_frame_codes, group_rules_by_category
 from .legend_page import append_legend_page
 from .schedule_editor import apply_text_replace
-from .lhh_image_lookup import find_all_lhh_codes_in_doc, load_lhh_lookup, list_drive_images, build_hardware_schedule
+from .lhh_image_lookup import find_all_lhh_codes_in_doc, build_hardware_schedule
 
 STEP_ORDER = ['logo', 'text_replace', 'mass', 'frame', 'hardware_schedule', 'legend']
 
@@ -91,7 +91,7 @@ def apply_frame(doc, frame_codes, frame_rules, glass_type_lookup):
     return {'rows': rows, 'pages': pages, 'highlight_rects': highlight_rects}
 
 
-def apply_hardware_schedule(doc):
+def apply_hardware_schedule(doc, lhh_lookup, drive_images):
     """
     Scan the whole working document for LHH### codes, look each one up
     (sheet + Drive image), and append the resulting Hardware Schedule
@@ -99,6 +99,12 @@ def apply_hardware_schedule(doc):
     so the schedule ends up sandwiched between the annotated
     schedule/quote content and the Legend page that gets appended after
     it.
+
+    lhh_lookup and drive_images are loaded once at the top of app.py
+    (alongside glass_lookup/frame_codes) and passed in here, rather than
+    loaded internally -- same pattern as apply_mass()/apply_frame()
+    below, so a load failure surfaces immediately at page-load time
+    rather than only when this step is actually clicked.
 
     Returns {'codes': sorted list of codes found, 'pages_added': int}
     for the UI to show as a result -- there's no per-item "rows" table
@@ -110,10 +116,7 @@ def apply_hardware_schedule(doc):
     if not codes:
         return {'codes': [], 'pages_added': 0}
 
-    lookup = load_lhh_lookup()
-    drive_images = list_drive_images()
-
-    schedule_doc = build_hardware_schedule(codes, lookup, drive_images)
+    schedule_doc = build_hardware_schedule(codes, lhh_lookup, drive_images)
     pages_added = schedule_doc.page_count
     doc.insert_pdf(schedule_doc)
     schedule_doc.close()

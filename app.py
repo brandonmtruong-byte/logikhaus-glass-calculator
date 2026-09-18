@@ -13,6 +13,7 @@ from modules.certificate_creator import (
     extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
     WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP, debug_quote_extraction,
 )
+from modules.lhh_image_lookup import load_lhh_lookup, list_drive_images
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
@@ -288,6 +289,20 @@ if st.session_state.active_view == 'PDF Modifier':
         st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
                    f'({type(e).__name__}: {e})')
 
+    lhh_lookup, lhh_drive_images = None, None
+    try:
+        with st.spinner('Loading hardware lookup...'):
+            lhh_lookup = load_lhh_lookup()
+            lhh_drive_images = list_drive_images()
+        st.markdown(
+            f'<div class="status-box">✓ Hardware lookup loaded - '
+            f'{len(lhh_lookup)} codes, {len(lhh_drive_images)} images</div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.warning(f'Could not load hardware lookup- the Hardware Schedule step will be skippable only. '
+                   f'({type(e).__name__}: {e})')
+
     st.markdown("---")
 
     # ── Dev-only: load a test file already committed to the repo ───────────
@@ -370,6 +385,13 @@ if st.session_state.active_view == 'PDF Modifier':
                 if frame_data_missing:
                     st.warning("Frame code sheet isn't available- this step can only be skipped.")
 
+                # Hardware Schedule step needs its lookup data available too
+                hardware_data_missing = step_key == 'hardware_schedule' and (
+                    lhh_lookup is None or lhh_drive_images is None
+                )
+                if hardware_data_missing:
+                    st.warning("Hardware lookup isn't available- this step can only be skipped.")
+
                 # Text replace step needs its own instructions .xlsx uploaded first
                 text_replace_xlsx = None
                 if step_key == 'text_replace':
@@ -387,7 +409,7 @@ if st.session_state.active_view == 'PDF Modifier':
                     )
 
                 text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
-                apply_disabled = frame_data_missing or text_replace_missing
+                apply_disabled = frame_data_missing or hardware_data_missing or text_replace_missing
 
                 col_apply, col_skip = st.columns([3, 1])
                 with col_apply:
@@ -416,7 +438,9 @@ if st.session_state.active_view == 'PDF Modifier':
                                 doc, frame_codes, frame_rules, glass_type_lookup
                             )
                         elif step_key == 'hardware_schedule':
-                            st.session_state.step_results[step_key] = apply_hardware_schedule(doc)
+                            st.session_state.step_results[step_key] = apply_hardware_schedule(
+                                doc, lhh_lookup, lhh_drive_images
+                            )
                         elif step_key == 'legend':
                             st.session_state.step_results[step_key] = apply_legend(doc)
                     st.session_state.step_status[step_key] = 'applied'
@@ -661,7 +685,7 @@ elif st.session_state.active_view == 'Certificate Creator':
 elif st.session_state.active_view == 'Xero Invoice Creator':
 
     render_eyebrow("Upload quotes")
-    st.caption("Either quote can be left out if that job type doesn't apply - upload whichever you have.")
+    st.caption("Either quote can be left out if that job type doesn't apply -- upload whichever you have.")
     col_w, col_b = st.columns(2)
     with col_w:
         windows_uploaded = st.file_uploader(
@@ -711,7 +735,7 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
     current_blinds_id  = blinds_uploaded.file_id if blinds_uploaded else None
     if (current_windows_id != st.session_state.get('xero_processed_windows_id')
             or current_blinds_id != st.session_state.get('xero_processed_blinds_id')):
-        st.info("Quotes have changed since the last Process click - click Process to update.")
+        st.info("Quotes have changed since the last Process click -- click Process to update.")
         st.stop()
 
     windows_info = st.session_state.get('xero_windows_info')
