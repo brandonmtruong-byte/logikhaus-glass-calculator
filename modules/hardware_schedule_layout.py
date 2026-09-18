@@ -5,13 +5,13 @@ just borders/header/column labels -- no placeholder content -- since
 the actual fill-in code (modules/lhh_image_lookup.py) inserts real
 images/text directly onto it via page.insert_image()/insert_text().
 
-Three columns per row:
-  1. Code + Name, stacked (two separate lines, e.g. "LHH001" / "Roto
-     non-keyed R01.1")
+Three columns per row, one value each (no stacking):
+  1. Code        -- the sheet's Code column (D) value only, e.g. "LHH101"
   2. Image
-  3. Colour + Description, stacked (two separate lines, e.g. "Anodised
-     silver F1" / whatever's in the sheet's Description column -- often
-     blank today, and that's fine, it just renders as an empty line)
+  3. Description  -- the sheet's Description column (I) value only,
+                     e.g. "Roto NX hinges R01.1 Silver F1" -- already a
+                     complete, composed description from the sheet
+                     itself, not built by combining other columns here.
 
 Usage sketch:
 
@@ -21,8 +21,6 @@ Usage sketch:
     for row_index, item in enumerate(page_items):   # up to ROWS_PER_PAGE items
         layout = row_rects_for_page()[row_index]
         page.insert_text(layout['code_origin'], item['code'], fontsize=10, fontname='hebo')
-        page.insert_text(layout['name_origin'], item['name'], fontsize=8, fontname='helv')
-        page.insert_text(layout['colour_origin'], item['colour'], fontsize=8, fontname='hebo')
         page.insert_textbox(layout['description_rect'], item['description'], fontsize=8, fontname='helv')
         if item.get('image_bytes'):
             img_rect = fit_image_rect(layout['image_box'], item['image_width'], item['image_height'])
@@ -38,14 +36,14 @@ MARGIN_X       = 40
 HEADER_HEIGHT  = 90     # logo + title band
 TABLE_TOP_Y    = 120    # where the column-header row starts
 COL_HEADER_H   = 22
-ROW_HEIGHT     = 110    # each hardware item's row
+ROW_HEIGHT     = 100    # each hardware item's row
 ROWS_PER_PAGE  = 6
 
-COL1_X0 = MARGIN_X            # Code + Name
-COL1_W  = 130
+COL1_X0 = MARGIN_X            # Code
+COL1_W  = 100
 COL2_X0 = COL1_X0 + COL1_W    # Image
 COL2_W  = 110
-COL3_X0 = COL2_X0 + COL2_W    # Colour + Description
+COL3_X0 = COL2_X0 + COL2_W    # Description
 COL3_W  = PAGE_WIDTH - MARGIN_X - COL3_X0
 
 IMAGE_PAD = 8   # inset so a photo doesn't touch the row's/column's border
@@ -57,17 +55,14 @@ def row_rects_for_page():
     page), each with:
         'row_rect'          : fitz.Rect of the whole row (reference/debug)
         'code_origin'       : (x, y) for a single-line page.insert_text() call
-        'name_origin'       : (x, y) likewise, sits just below code_origin
         'image_box'         : fitz.Rect -- the AVAILABLE space for the
                                image, not the final placement. Pass this
                                into fit_image_rect() to get the actual
                                rect to insert_image() with, since the
                                real placement depends on that specific
                                image's own aspect ratio.
-        'colour_origin'     : (x, y) for a single-line page.insert_text() call
         'description_rect'  : fitz.Rect -- pass to page.insert_textbox()
-                               for wrapping (description length varies
-                               a lot, from blank to multiple sentences)
+                               for wrapping (description length varies)
     Identical for every page -- each new page starts this same sequence
     over again from row 0.
     """
@@ -84,11 +79,9 @@ def row_rects_for_page():
 
         rows.append({
             'row_rect':         row_rect,
-            'code_origin':      (COL1_X0 + 8, row_y0 + 22),
-            'name_origin':      (COL1_X0 + 8, row_y0 + 40),
+            'code_origin':      (COL1_X0 + 8, row_y0 + ROW_HEIGHT / 2 + 3),
             'image_box':        image_box,
-            'colour_origin':    (COL3_X0 + 8, row_y0 + 22),
-            'description_rect': fitz.Rect(COL3_X0 + 8, row_y0 + 30,
+            'description_rect': fitz.Rect(COL3_X0 + 8, row_y0 + 10,
                                            PAGE_WIDTH - MARGIN_X - 8, row_y1 - 8),
         })
     return rows

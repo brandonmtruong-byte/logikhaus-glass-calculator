@@ -7,17 +7,25 @@ hardware_schedule_layout.py's template) that gets appended to the end
 of the document -- see modules/steps.py's apply_hardware_schedule(),
 which runs this as the step right before Legend in the stepper.
 
-Sheet layout (row 1 is always the header; confirmed fixed, no guide
-rows above it):
-    Code | Names | Colour | Description
-Columns are found by matching the header text, not by a hardcoded
-column letter, so it doesn't matter which literal spreadsheet column
-each one lives in as long as row 1 has these exact labels somewhere on
-it. Rows where the Code cell is blank are skipped.
+Sheet layout: the sheet now has MULTIPLE TABS (one per hardware
+category, e.g. "LH1 window hinges", "LH2 swing doors"...) -- every tab
+is read and merged into one combined lookup. Row 1 is each tab's own
+header row; columns are found by matching header text ("Code" / column
+D, "Description" / column I in the current layout), not a hardcoded
+column letter, so it doesn't matter which literal column they're in as
+long as row 1 has those labels somewhere on it. A tab with no "Code"
+header at all is skipped entirely (not every tab may follow this
+format). Only Code and Description are read -- Hardware/Type/Brand/
+Name/Colour/Image columns are ignored, since Description is already a
+complete, pre-composed value in the sheet itself.
 
-Drive folder: one image per code, filename is "<CODE>_<anything>.ext"
--- only the part before the first underscore is used to match a code;
-everything after it (and the file extension) is ignored.
+Drive folder: images now live in a NESTED folder structure (subfolders
+like "LHH0", "LHH1", "black set"...) rather than one flat folder, so
+the whole tree is walked recursively -- every image found at any depth,
+plus any sitting loose in the root folder itself. Filename matching is
+unchanged: the LHH### pattern is matched at the start of the filename,
+independent of subfolder location or naming (underscore- or
+space-separated, or no separator at all).
 """
 
 import io
@@ -43,8 +51,6 @@ LHH_CODE_PATTERN = r'LHH\d+'
 
 HEADER_COLUMN_NAMES = {
     'code':        'code',
-    'name':        'names',
-    'colour':      'colour',
     'description': 'description',
 }
 
@@ -53,20 +59,13 @@ HEADER_COLUMN_NAMES = {
 #  SHEET LOOKUP
 # ═════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=300)
-def load_lhh_lookup():
+def _read_lookup_from_worksheet(worksheet):
     """
-    Read the LHH sheet and return {code: {'name', 'colour', 'description'}}.
-
-    Row 1 is the header -- columns are matched by their header text
-    (case-insensitive), not a fixed column letter, so "Code"/"Names"/
-    "Colour"/"Description" can live in any column as long as they're
-    somewhere in row 1. Rows with a blank Code cell are skipped.
+    Read a single tab and return {code: {'description': ...}} from it,
+    or {} if this tab doesn't have a "Code" column in its header row at
+    all (some tabs may not follow this format).
     """
-    creds = get_google_credentials()
-    gc = gspread.authorize(creds)
-    ws = gc.open_by_key(LHH_SHEET_ID).sheet1
-    rows = ws.get_all_values()
+    rows = worksheet.get_all_values()
     if not rows:
         return {}
 
@@ -77,7 +76,7 @@ def load_lhh_lookup():
             col_index[key] = header.index(header_name)
 
     if 'code' not in col_index:
-        return {}   # header row doesn't have a "Code" column at all -- nothing to read
+        return {}
 
     lookup = {}
     for row in rows[1:]:
@@ -88,12 +87,27 @@ def load_lhh_lookup():
         code = cell('code')
         if not code:
             continue   # blank row -- skip
-        lookup[code] = {
-            'name':        cell('name'),
-            'colour':      cell('colour'),
-            'description': cell('description'),
-        }
+        lookup[code] = {'description': cell('description')}
     return lookup
+
+
+@st.cache_data(ttl=300)
+def load_lhh_lookup():
+    """
+    Read EVERY tab of the LHH sheet and merge them into one combined
+    {code: {'description': ...}} lookup. If the same code somehow
+    appears on more than one tab, whichever tab is read last wins --
+    tabs are read in the order gspread reports them (left to right, as
+    shown in the sheet's own tab bar).
+    """
+    creds = get_google_credentials()
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open_by_key(LHH_SHEET_ID)
+
+    combined_lookup = {}
+    for worksheet in spreadsheet.worksheets():
+        combined_lookup.update(_read_lookup_from_worksheet(worksheet))
+    return combined_lookup
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -106,32 +120,55 @@ def _drive_service():
     return build('drive', 'v3', credentials=creds)
 
 
-@st.cache_data(ttl=300)
-def list_drive_images():
+def _list_children(service, folder_id):
     """
-    Return {filename: file_id} for every image file in the shared Drive
-    folder. The service account must have the folder shared with it
-    (view access is enough) -- same account used for the Sheets
-    connections.
+    One folder's direct children (not recursive) -- both subfolders and
+    image files, since the real folder can have both at the same level
+    (e.g. some loose images sitting alongside the "LHH0"/"LHH1"/...
+    subfolders in the root). Returns (subfolder_ids, {filename: file_id}).
     """
-    service = _drive_service()
-    query = (
-        f"'{LHH_DRIVE_FOLDER_ID}' in parents "
-        f"and mimeType contains 'image/' and trashed = false"
-    )
+    query = f"'{folder_id}' in parents and trashed = false"
+    subfolder_ids = []
     images = {}
     page_token = None
     while True:
         response = service.files().list(
             q=query,
-            fields="nextPageToken, files(id, name)",
+            fields="nextPageToken, files(id, name, mimeType)",
             pageToken=page_token,
         ).execute()
         for f in response.get('files', []):
-            images[f['name']] = f['id']
+            if f['mimeType'] == 'application/vnd.google-apps.folder':
+                subfolder_ids.append(f['id'])
+            elif f['mimeType'].startswith('image/'):
+                images[f['name']] = f['id']
         page_token = response.get('nextPageToken')
         if not page_token:
             break
+    return subfolder_ids, images
+
+
+@st.cache_data(ttl=300)
+def list_drive_images():
+    """
+    Return {filename: file_id} for every image file found ANYWHERE in
+    the shared Drive folder's tree -- the folder itself, plus every
+    subfolder at any depth (images are organized into subfolders like
+    "LHH0"/"LHH1"/"LHH2"/"LHH3" now, rather than sitting in one flat
+    folder). The service account must have the root folder shared with
+    it (view access is enough, and that access extends to everything
+    inside it) -- same account used for the Sheets connections.
+    """
+    service = _drive_service()
+    images = {}
+    folders_to_visit = [LHH_DRIVE_FOLDER_ID]
+
+    while folders_to_visit:
+        current_folder = folders_to_visit.pop()
+        subfolder_ids, folder_images = _list_children(service, current_folder)
+        images.update(folder_images)
+        folders_to_visit.extend(subfolder_ids)
+
     return images
 
 
@@ -157,7 +194,8 @@ def build_code_to_file_id_map(drive_images):
     directly works for either without caring which separator (if any)
     follows it. There's exactly one image per code, so the first match
     for a given code wins if the folder somehow has more than one file
-    with the same prefix.
+    with the same prefix. A file with no LHH### prefix at all (e.g. a
+    loose, not-yet-sorted image) simply doesn't match anything here.
     """
     code_map = {}
     for filename, file_id in drive_images.items():
@@ -233,10 +271,10 @@ def build_hardware_schedule(codes, lookup, drive_images):
     given (find_all_lhh_codes_in_doc() already sorts them).
 
     A code with no sheet entry still gets a row (just the code itself,
-    blank name/colour/description) rather than being silently dropped --
-    same "show the gap, don't hide it" principle as the Certificate
-    Creator's missing-fields handling. Same for a code with no matching
-    Drive image: the row just has no image rather than erroring out.
+    blank description) rather than being silently dropped -- same "show
+    the gap, don't hide it" principle as the Certificate Creator's
+    missing-fields handling. Same for a code with no matching Drive
+    image: the row just has no image rather than erroring out.
 
     Returns the fitz.Document -- caller is responsible for closing it
     (or inserting its pages into another doc and then closing it).
@@ -256,11 +294,6 @@ def build_hardware_schedule(codes, lookup, drive_images):
         info = lookup.get(code, {})
 
         page.insert_text(layout['code_origin'], code, fontsize=10, fontname='hebo', color=(0, 0, 0))
-        if info.get('name'):
-            page.insert_text(layout['name_origin'], info['name'], fontsize=8, fontname='helv', color=(0.2, 0.2, 0.2))
-
-        if info.get('colour'):
-            page.insert_text(layout['colour_origin'], info['colour'], fontsize=8, fontname='hebo', color=(0, 0, 0))
         if info.get('description'):
             page.insert_textbox(
                 layout['description_rect'], info['description'],
