@@ -49,11 +49,6 @@ LHH_DRIVE_FOLDER_ID = '11gVQL1K1xrCm7j_UB7R_NqK63wqZTRtH'
 
 LHH_CODE_PATTERN = r'LHH\d+'
 
-HEADER_COLUMN_NAMES = {
-    'code':        'code',
-    'description': 'description',
-}
-
 
 # ═════════════════════════════════════════════════════════════════════════
 #  SHEET LOOKUP
@@ -61,33 +56,27 @@ HEADER_COLUMN_NAMES = {
 
 def _read_lookup_from_worksheet(worksheet):
     """
-    Read a single tab and return {code: {'description': ...}} from it,
-    or {} if this tab doesn't have a "Code" column in its header row at
-    all (some tabs may not follow this format).
+    Read a single tab and return {code: {'description': ...}} from it.
+    Fixed column positions -- column D (index 3) for Code, column I
+    (index 8) for Description -- rather than searching for those words
+    in the header row, since that search wasn't reliably landing on the
+    right cells. Row 1 is still assumed to be the header (skipped);
+    everything from row 2 down is read as data.
     """
     rows = worksheet.get_all_values()
-    if not rows:
+    if len(rows) < 2:
         return {}
 
-    header = [cell.strip().lower() for cell in rows[0]]
-    col_index = {}
-    for key, header_name in HEADER_COLUMN_NAMES.items():
-        if header_name in header:
-            col_index[key] = header.index(header_name)
-
-    if 'code' not in col_index:
-        return {}
+    CODE_COL = 3    # column D
+    DESC_COL = 8    # column I
 
     lookup = {}
     for row in rows[1:]:
-        def cell(key):
-            idx = col_index.get(key)
-            return row[idx].strip() if idx is not None and idx < len(row) else ''
-
-        code = cell('code')
+        code = row[CODE_COL].strip() if CODE_COL < len(row) else ''
         if not code:
             continue   # blank row -- skip
-        lookup[code] = {'description': cell('description')}
+        description = row[DESC_COL].strip() if DESC_COL < len(row) else ''
+        lookup[code] = {'description': description}
     return lookup
 
 
@@ -136,6 +125,15 @@ def _list_children(service, folder_id):
             q=query,
             fields="nextPageToken, files(id, name, mimeType)",
             pageToken=page_token,
+            # LOCAL CHANGE: without these two flags, files.list() silently
+            # excludes anything living in a Shared Drive (a Workspace Team
+            # Drive) -- returns zero results with no error, which is very
+            # likely why images weren't coming through at all despite the
+            # folder structure and sharing being otherwise correct. Safe
+            # to leave set even if this ISN'T a Shared Drive -- harmless
+            # no-op for regular "My Drive" folders.
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         ).execute()
         for f in response.get('files', []):
             if f['mimeType'] == 'application/vnd.google-apps.folder':
@@ -175,7 +173,7 @@ def list_drive_images():
 def download_drive_image(file_id):
     """Download a single image file's raw bytes from Drive by its file ID."""
     service = _drive_service()
-    request = service.files().get_media(fileId=file_id)
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     buffer = io.BytesIO()
     downloader = MediaIoBaseDownload(buffer, request)
     done = False
