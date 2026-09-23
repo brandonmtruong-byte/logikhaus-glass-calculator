@@ -30,7 +30,7 @@ FRAME_COLOR = (0.91, 0.82, 0.63)   # tan
 GLASS_COLOR = (0.75, 0.24, 0.62)   # magenta, matching the reference image
 
 
-def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=500):
+def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100):
     """
     Returns PNG bytes for a to-scale window diagram.
 
