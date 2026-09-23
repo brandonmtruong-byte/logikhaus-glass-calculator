@@ -67,8 +67,8 @@ def _read_lookup_from_worksheet(worksheet):
     if len(rows) < 2:
         return {}
 
-    CODE_COL = 1    # column D
-    DESC_COL = 5    # column I
+    CODE_COL = 1    # column B
+    DESC_COL = 6    # column G
 
     lookup = {}
     for row in rows[1:]:
