@@ -795,4 +795,4 @@ elif st.session_state.active_view == 'Window Diagram Creator':
 
     st.markdown("---")
     render_eyebrow("Diagram")
-    st.image(diagram_png, width=600)
+    st.image(diagram_png, width=750)
