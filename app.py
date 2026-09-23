@@ -19,6 +19,7 @@ from modules.steps import (
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
+from modules.window_diagram import draw_window_diagram
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -39,7 +40,7 @@ render_header()
 if 'active_view' not in st.session_state:
     st.session_state.active_view = 'PDF Modifier'
 
-col_view1, col_view2, col_view3 = st.columns(3)
+col_view1, col_view2, col_view3, col_view4 = st.columns(4)
 with col_view1:
     with st.container(key="tab_pdf_modifier"):
         if st.button(
@@ -63,6 +64,14 @@ with col_view3:
             type="primary" if st.session_state.active_view == 'Xero Invoice Creator' else "secondary",
         ):
             st.session_state.active_view = 'Xero Invoice Creator'
+            st.rerun()
+with col_view4:
+    with st.container(key="tab_window_diagram"):
+        if st.button(
+            "Window Diagram Creator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Window Diagram Creator' else "secondary",
+        ):
+            st.session_state.active_view = 'Window Diagram Creator'
             st.rerun()
 
 st.markdown("---")
@@ -762,3 +771,28 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
     st.markdown("---")
     render_eyebrow("Generated invoice text")
     st.code(invoice_text, language=None)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: WINDOW DIAGRAM CREATOR — fully independent, no other view's state touched
+# ═════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_view == 'Window Diagram Creator':
+
+    render_eyebrow("Window dimensions")
+    col_w, col_h = st.columns(2)
+    with col_w:
+        window_width_mm = st.number_input(
+            "Width (mm)", min_value=1, value=1200, step=10, key="window_diagram_width"
+        )
+    with col_h:
+        window_height_mm = st.number_input(
+            "Height (mm)", min_value=1, value=1500, step=10, key="window_diagram_height"
+        )
+
+    # No button, no gate -- this is cheap local vector drawing with no
+    # network/file I/O involved, so it just redraws on every keystroke.
+    diagram_png = draw_window_diagram(window_width_mm, window_height_mm)
+
+    st.markdown("---")
+    render_eyebrow("Diagram")
+    st.image(diagram_png)

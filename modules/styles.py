@@ -159,7 +159,8 @@ CUSTOM_CSS = """
        wins no matter the injection order. */
     div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button,
     div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button,
-    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button {
+    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button,
+    div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button {
         background: transparent !important;
         border: none !important;
         border-radius: 0 !important;
@@ -173,14 +174,16 @@ CUSTOM_CSS = """
     }
     div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button[kind="primary"],
     div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button[kind="primary"],
-    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button[kind="primary"] {
+    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button[kind="primary"],
+    div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button[kind="primary"] {
         color: #f0f0f2 !important;
         font-weight: 600 !important;
         border-bottom: 2px solid #A13336 !important;
     }
     div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button:hover,
     div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button:hover,
-    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button:hover {
+    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button:hover,
+    div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button:hover {
         background: transparent !important;
         color: #d0d2d8 !important;
     }
