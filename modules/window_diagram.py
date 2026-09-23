@@ -30,7 +30,7 @@ FRAME_COLOR = (0.91, 0.82, 0.63)   # tan
 GLASS_COLOR = (0.75, 0.24, 0.62)   # magenta, matching the reference image
 
 
-def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100):
+def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=200):
     """
     Returns PNG bytes for a to-scale window diagram.
 
@@ -38,13 +38,12 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     frame_color, glass_color: RGB tuples, each channel 0-1 (fitz's
         convention), overridable per call if a specific job needs
         different colours than the defaults.
-    dpi: rasterization resolution for the returned PNG -- the one knob
-        that controls overall DISPLAY SIZE, since it scales the whole
-        output uniformly regardless of the window's aspect ratio (unlike
-        a fixed pixel width, which would need a different height for
-        every shape). Was 200, halved to 100 here -- change this default,
-        or pass dpi=... explicitly at the call site in app.py, to try
-        other sizes.
+    dpi: rasterization resolution for the returned PNG -- controls
+        actual image QUALITY (how many real pixels get drawn), not
+        display size. Keep this high; control how big the diagram
+        appears on screen separately, via st.image()'s width= in
+        app.py, which just scales a crisp high-res image down rather
+        than generating a genuinely lower-resolution (blurrier) one.
     """
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError(f"width_mm and height_mm must both be positive (got {width_mm}, {height_mm})")
@@ -70,19 +69,19 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     page.draw_rect(outer, color=(0.2, 0.2, 0.2), fill=frame_color, width=1.2)
     page.draw_rect(inner, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
 
-    # Frame construction seams: the top and bottom rails run the FULL
-    # outer width, corner to corner -- the left and right stiles are
-    # shorter, fitted in the gap between the top/bottom rails rather
+    # Frame construction seams: the LEFT and RIGHT stiles run the FULL
+    # outer height, corner to corner -- the top and bottom rails are
+    # shorter, fitted in the gap between the left/right stiles rather
     # than reaching the corners themselves. A short line at each corner,
-    # perpendicular to the frame edge, marks where a rail's edge crosses
-    # over a stile -- four lines total, one per corner.
+    # perpendicular to the frame edge, marks where a stile's edge
+    # crosses over a rail -- four lines total, one per corner.
     seam_color = (0.2, 0.2, 0.2)
-    left_stile_x  = x0 + frame_thickness
-    right_stile_x = x1 - frame_thickness
-    page.draw_line((left_stile_x, y0), (left_stile_x, y0 + frame_thickness), color=seam_color, width=1)
-    page.draw_line((left_stile_x, y1 - frame_thickness), (left_stile_x, y1), color=seam_color, width=1)
-    page.draw_line((right_stile_x, y0), (right_stile_x, y0 + frame_thickness), color=seam_color, width=1)
-    page.draw_line((right_stile_x, y1 - frame_thickness), (right_stile_x, y1), color=seam_color, width=1)
+    top_rail_y    = y0 + frame_thickness
+    bottom_rail_y = y1 - frame_thickness
+    page.draw_line((x0, top_rail_y), (x0 + frame_thickness, top_rail_y), color=seam_color, width=1)
+    page.draw_line((x1 - frame_thickness, top_rail_y), (x1, top_rail_y), color=seam_color, width=1)
+    page.draw_line((x0, bottom_rail_y), (x0 + frame_thickness, bottom_rail_y), color=seam_color, width=1)
+    page.draw_line((x1 - frame_thickness, bottom_rail_y), (x1, bottom_rail_y), color=seam_color, width=1)
 
     # Width dimension line (below)
     dim_y = y1 + DIM_GAP
