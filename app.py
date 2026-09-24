@@ -23,7 +23,7 @@ from modules.window_diagram import draw_window_diagram
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus Glass Calculator",
+    page_title="Logikhaus PDFixr",
     page_icon="🪟",
     layout="centered"
 )
