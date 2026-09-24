@@ -34,6 +34,60 @@ TAX_RATE         = 'GST on Income'
 DEPOSIT_QTY      = '0.6'
 
 
+# ── Client name combining ───────────────────────────────────────────────
+# Combines the first name(s) from the quote's "Dear <names>," line with
+# the surname(s) from its "Client:" field. The same code also lives in
+# certificate_creator.py; the two copies are deliberately separate so
+# each creator stays fully independent. Change both if you change one.
+#
+#   Single surname            "Morey"
+#       "Caitlin & Chris" + "Morey"         -> "Caitlin & Chris Morey"
+#   Double-barrelled surname  "Smith - Jones" (spaces optional)
+#       "Caitlin & Chris" + "Smith - Jones" -> "Caitlin & Chris Smith-Jones"
+#   Two spouses' surnames     "Smith & Jones" / "Smith and Jones"
+#       "Caitlin & Chris" + "Smith & Jones" -> "Caitlin Smith & Chris Jones"
+#
+# If the number of first names doesn't match the number of surnames, the
+# names can't be paired reliably, so the first names are kept as written
+# and all the surnames are appended joined by " & " instead.
+
+# "&" or the whole word "and" (case-insensitive). The \b word boundaries
+# stop this splitting surnames that merely contain "and" ("Anderson").
+_SPOUSE_SEPARATOR = re.compile(r'\s*(?:&|\band\b)\s*', re.IGNORECASE)
+
+# A hyphen (or an en/em dash, in case the quote's font substitutes one)
+# with any amount of surrounding whitespace, including none.
+_HYPHEN = re.compile(r'\s*[-\u2013\u2014]\s*')
+
+
+def _split_names(text):
+    """Split on "&" / "and" and drop any empty pieces."""
+    return [part.strip() for part in _SPOUSE_SEPARATOR.split(text) if part.strip()]
+
+
+def combine_client_name(first_names, surname_field):
+    """
+    Combine the "Dear ..." first names with the "Client:" surname field
+    using the rules above. Both arguments are the raw regex captures.
+    """
+    first_names = first_names.strip()
+    surnames = [_HYPHEN.sub('-', s) for s in _split_names(surname_field)]
+
+    if not surnames:
+        return first_names
+
+    # One surname (plain or double-barrelled): the original behaviour.
+    if len(surnames) == 1:
+        return f'{first_names} {surnames[0]}'
+
+    # Two or more surnames: pair them with the first names in order.
+    firsts = _split_names(first_names)
+    if len(firsts) == len(surnames):
+        return ' & '.join(f'{first} {last}' for first, last in zip(firsts, surnames))
+
+    # The counts don't match, so don't guess a pairing.
+    return f"{first_names} {' & '.join(surnames)}"
+
 def extract_windows_quote_info(doc):
     """
     Returns {'client': ..., 'site': ..., 'price': ...} from a windows/
@@ -47,7 +101,7 @@ def extract_windows_quote_info(doc):
     surname_match = re.search(r'Client:\s*(.+?)\s*\n', text)
     dear_match     = re.search(r'Dear\s+([^,]+),', text)
     if surname_match and dear_match:
-        data['client'] = f"{dear_match.group(1).strip()} {surname_match.group(1).strip()}"
+        data['client'] = combine_client_name(dear_match.group(1), surname_match.group(1))
 
     # Try the footer-anchored boundary first (works when the page footer
     # "W www.logikhaus..." happens to land AFTER Project: in the PDF's
