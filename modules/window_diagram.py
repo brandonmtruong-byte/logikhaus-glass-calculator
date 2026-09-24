@@ -42,7 +42,15 @@ GLASS_COLOR = (0.75, 0.24, 0.62)   # magenta, matching the reference image
 # same member sizes on windows of different sizes -- a real sash profile
 # doesn't get thicker just because the window is bigger. Each is scaled
 # with the same mm-to-points factor as the window itself.
-SASH_INSET_MM       = 24    # outer frame strip left showing around the sash
+# Margin: how much of the fixed window frame shows around the sash, on
+# every side. Bigger = more frame visible, smaller sash. Can also be
+# overridden per call via draw_window_diagram(sash_margin_mm=...).
+SASH_MARGIN_MM      = 36
+# The margin can never exceed this fraction of the fixed frame's drawn
+# thickness. Past the full thickness, the fixed window's glass would show
+# between the outer frame and the sash; 0.75 also keeps the frame's
+# corner seam ticks visible. On most windows this cap won't be reached.
+SASH_MARGIN_MAX_FRAME_RATIO = 0.75
 SASH_STILE_MM       = 90    # left/right sash members (run the full sash height)
 SASH_TOP_RAIL_MM    = 78    # top sash member (fitted between the stiles)
 SASH_BOTTOM_RAIL_MM = 90    # bottom sash member (fitted between the stiles)
@@ -76,7 +84,7 @@ LINE_COLOR = (0.2, 0.2, 0.2)
 
 
 def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100,
-                        swing=False, handle_side='right'):
+                        swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM):
     """
     Returns PNG bytes for a to-scale window diagram.
 
@@ -94,6 +102,8 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         opening sash and handle on top of it (see _draw_sash()).
     handle_side: 'left' or 'right' -- which side the handle goes on.
         Only used when swing is True.
+    sash_margin_mm: how much of the fixed frame shows around the sash,
+        in mm (default SASH_MARGIN_MM). Only used when swing is True.
     """
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError(f"width_mm and height_mm must both be positive (got {width_mm}, {height_mm})")
@@ -136,7 +146,8 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     page.draw_line((x1 - frame_thickness, bottom_rail_y), (x1, bottom_rail_y), color=seam_color, width=1)
 
     if swing:
-        _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side)
+        _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
+                   sash_margin_mm)
 
     # Width dimension line (below)
     dim_y = y1 + DIM_GAP
@@ -163,7 +174,8 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     return png_bytes
 
 
-def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side):
+def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
+               sash_margin_mm):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -175,7 +187,7 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
 
     Layout (matching the reference drawings): the sash is inset from the
-    outer frame by SASH_INSET_MM on every side, so a thin strip of the
+    outer frame by sash_margin_mm on every side, so a thin strip of the
     fixed frame shows around it. Its stiles run the sash's full height,
     and the top and bottom rails fit between them. The glass fills the
     space inside. The handle is a short thick bar centred on the glass
@@ -186,10 +198,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     shorter_side_mm = min(outer.width, outer.height) / scale
     part_scale = scale * min(1.0, shorter_side_mm / SASH_REFERENCE_SIZE_MM)
 
-    # Never more than half the fixed frame's thickness: on small windows
-    # the fixed frame is thin, and a wider gap would leave the fixed
-    # window's glass showing between the outer frame and the sash.
-    inset = min(SASH_INSET_MM * part_scale, frame_thickness / 2)
+    # Capped against the fixed frame's thickness (see
+    # SASH_MARGIN_MAX_FRAME_RATIO), which matters mostly on small windows.
+    inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
     sash = fitz.Rect(outer.x0 + inset, outer.y0 + inset,
                      outer.x1 - inset, outer.y1 - inset)
 
