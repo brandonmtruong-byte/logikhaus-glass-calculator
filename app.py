@@ -789,15 +789,28 @@ elif st.session_state.active_view == 'Window Diagram Creator':
             "Height (mm)", min_value=1, value=1500, step=10, key="window_diagram_height"
         )
 
+    col_swing, col_handle = st.columns(2)
+    with col_swing:
+        window_swing = st.toggle("Opening sash", value=False, key="window_diagram_swing")
+    with col_handle:
+        # Only matters when there's a sash to put the handle on.
+        window_handle_side = st.radio(
+            "Handle side", ["Left", "Right"], index=1, horizontal=True,
+            key="window_diagram_handle_side", disabled=not window_swing,
+        )
+
     # No button, no gate -- this is cheap local vector drawing with no
     # network/file I/O involved, so it just redraws on every keystroke.
-    diagram_png = draw_window_diagram(window_width_mm, window_height_mm)
+    diagram_png = draw_window_diagram(
+        window_width_mm, window_height_mm,
+        swing=window_swing, handle_side=window_handle_side.lower(),
+    )
 
     st.markdown("---")
     render_eyebrow("Diagram")
-        # Fit the diagram inside a max width AND a max height. Tall windows
-    # make a narrow, tall image, so a fixed width alone lets them grow
-    # too tall; this shrinks the width until the height fits too.
+
+    # Fit the diagram inside a max width AND a max height, so tall
+    # windows don't grow too tall on screen.
     MAX_DIAGRAM_WIDTH  = 750
     MAX_DIAGRAM_HEIGHT = 450
     diagram_pix = fitz.Pixmap(diagram_png)
