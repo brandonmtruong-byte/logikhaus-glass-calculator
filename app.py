@@ -795,4 +795,14 @@ elif st.session_state.active_view == 'Window Diagram Creator':
 
     st.markdown("---")
     render_eyebrow("Diagram")
-    st.image(diagram_png, width=750)
+        # Fit the diagram inside a max width AND a max height. Tall windows
+    # make a narrow, tall image, so a fixed width alone lets them grow
+    # too tall; this shrinks the width until the height fits too.
+    MAX_DIAGRAM_WIDTH  = 750
+    MAX_DIAGRAM_HEIGHT = 450
+    diagram_pix = fitz.Pixmap(diagram_png)
+    display_width = min(
+        MAX_DIAGRAM_WIDTH,
+        int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
+    )
+    st.image(diagram_png, width=display_width)
