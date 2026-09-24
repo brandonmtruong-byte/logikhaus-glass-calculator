@@ -47,13 +47,26 @@ SASH_STILE_MM       = 90    # left/right sash members (run the full sash height)
 SASH_TOP_RAIL_MM    = 78    # top sash member (fitted between the stiles)
 SASH_BOTTOM_RAIL_MM = 90    # bottom sash member (fitted between the stiles)
 
-# On small windows the members above could swallow most of the glass, so
-# each one is capped at this fraction of the sash's width/height.
+# Windows with a shorter side below this size get every sash part (the
+# gap, stiles, rails and handle) shrunk by the SAME factor, e.g. a
+# 1000 x 200 window's shorter side is 200, so everything is drawn at
+# 200/800 = 25% size. Shrinking all parts together keeps them in
+# proportion with each other on thin or small windows, instead of some
+# being squashed while others stay full size. 800 mm is the smallest
+# window in the reference drawings that still had full-size parts.
+SASH_REFERENCE_SIZE_MM = 800
+
+# Safety net only: no single part may take more than this fraction of the
+# sash's width/height. The shrinking above normally keeps parts well
+# under this already.
 SASH_MEMBER_MAX_RATIO = 0.2
 
 HANDLE_LENGTH_MM    = 115
 HANDLE_THICKNESS_MM = 15
-HANDLE_MIN_THICKNESS_PT = 2.0   # keeps the bar visible on large windows drawn small
+# Minimum on-screen size in points: very large windows are drawn at a
+# small scale, where a to-scale handle would shrink to an unreadable tick.
+HANDLE_MIN_THICKNESS_PT = 2.0
+HANDLE_MIN_LENGTH_PT    = 14.0
 # Handle's centre height, as a fraction of the window height measured
 # up from the bottom (the reference windows sit around 0.40-0.45).
 HANDLE_HEIGHT_RATIO = 0.42
@@ -158,6 +171,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     scale: points per mm, the same factor used for the window itself.
     frame_thickness: the fixed frame's thickness in points, as drawn.
 
+    Parts are drawn at their real mm sizes on windows whose shorter side
+    is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
+
     Layout (matching the reference drawings): the sash is inset from the
     outer frame by SASH_INSET_MM on every side, so a thin strip of the
     fixed frame shows around it. Its stiles run the sash's full height,
@@ -165,18 +181,23 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     space inside. The handle is a short thick bar centred on the glass
     edge on the handle side.
     """
+    # Points per mm for the sash parts: the window's own scale, times the
+    # shrink factor for thin/small windows (see SASH_REFERENCE_SIZE_MM).
+    shorter_side_mm = min(outer.width, outer.height) / scale
+    part_scale = scale * min(1.0, shorter_side_mm / SASH_REFERENCE_SIZE_MM)
+
     # Never more than half the fixed frame's thickness: on small windows
     # the fixed frame is thin, and a wider gap would leave the fixed
     # window's glass showing between the outer frame and the sash.
-    inset = min(SASH_INSET_MM * scale, frame_thickness / 2)
+    inset = min(SASH_INSET_MM * part_scale, frame_thickness / 2)
     sash = fitz.Rect(outer.x0 + inset, outer.y0 + inset,
                      outer.x1 - inset, outer.y1 - inset)
 
     max_across = sash.width * SASH_MEMBER_MAX_RATIO
     max_down   = sash.height * SASH_MEMBER_MAX_RATIO
-    stile       = min(SASH_STILE_MM * scale, max_across)
-    top_rail    = min(SASH_TOP_RAIL_MM * scale, max_down)
-    bottom_rail = min(SASH_BOTTOM_RAIL_MM * scale, max_down)
+    stile       = min(SASH_STILE_MM * part_scale, max_across)
+    top_rail    = min(SASH_TOP_RAIL_MM * part_scale, max_down)
+    bottom_rail = min(SASH_BOTTOM_RAIL_MM * part_scale, max_down)
 
     glass = fitz.Rect(sash.x0 + stile, sash.y0 + top_rail,
                       sash.x1 - stile, sash.y1 - bottom_rail)
@@ -193,7 +214,7 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     # Handle: centred on the glass edge on the chosen side.
     edge_x   = glass.x1 if handle_side == 'right' else glass.x0
     handle_y = outer.y1 - outer.height * HANDLE_HEIGHT_RATIO
-    half_len = HANDLE_LENGTH_MM * scale / 2
-    thickness = max(HANDLE_THICKNESS_MM * scale, HANDLE_MIN_THICKNESS_PT)
+    half_len = max(HANDLE_LENGTH_MM * part_scale, HANDLE_MIN_LENGTH_PT) / 2
+    thickness = max(HANDLE_THICKNESS_MM * part_scale, HANDLE_MIN_THICKNESS_PT)
     page.draw_line((edge_x - half_len, handle_y), (edge_x + half_len, handle_y),
                    color=HANDLE_COLOR, width=thickness, lineCap=1)
