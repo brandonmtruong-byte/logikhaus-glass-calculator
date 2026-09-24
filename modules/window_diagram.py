@@ -32,6 +32,10 @@ DIM_GAP       = 25    # gap between the drawing and its dimension line
 DIM_TICK      = 8     # length of the little end-ticks on dimension lines
 LABEL_FONTSIZE = 16
 
+# PDF export (draw_window_diagram_pdf): blank border around the diagram
+# on the page, in points (72 pt = 1 inch, so 40 pt is about 14 mm).
+PDF_PAGE_MARGIN_PT = 40
+
 FRAME_THICKNESS_RATIO = 0.045   # frame border as a fraction of the shorter side
 FRAME_COLOR = (0.91, 0.82, 0.63)   # tan
 GLASS_COLOR = (0.75, 0.24, 0.62)   # magenta, matching the reference image
@@ -86,7 +90,7 @@ LINE_COLOR = (0.2, 0.2, 0.2)
 def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100,
                         swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM):
     """
-    Returns PNG bytes for a to-scale window diagram.
+    Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
     width_mm, height_mm: the real window dimensions. Must both be > 0.
     frame_color, glass_color: RGB tuples, each channel 0-1 (fitz's
@@ -104,6 +108,67 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         Only used when swing is True.
     sash_margin_mm: how much of the fixed frame shows around the sash,
         in mm (default SASH_MARGIN_MM). Only used when swing is True.
+    """
+    doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
+                             swing, handle_side, sash_margin_mm)
+    pix = doc[0].get_pixmap(dpi=dpi)
+    png_bytes = pix.tobytes('png')
+    doc.close()
+    return png_bytes
+
+
+def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR,
+                            swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
+                            paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
+    """
+    Returns PDF bytes: the same diagram as draw_window_diagram(), placed
+    on a blank page (A4 by default) and enlarged to fill it, centred.
+
+    The diagram stays VECTOR in the PDF -- lines, fills and numbers are
+    drawn shapes and text, not a picture -- so it's sharp at any zoom
+    level and prints at the printer's full resolution. The page turns
+    landscape automatically when the diagram is wider than it is tall.
+
+    Takes the same drawing arguments as draw_window_diagram() (no dpi,
+    since nothing is rasterized), plus:
+    paper: any paper size name fitz understands ('a4', 'a3', 'letter', ...).
+    page_margin_pt: blank border around the diagram, in points (72 pt = 1 inch).
+    """
+    diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
+                                 swing, handle_side, sash_margin_mm)
+    diagram_rect = diagram[0].rect
+
+    paper_rect = fitz.paper_rect(paper)
+    if diagram_rect.width > diagram_rect.height:
+        paper_rect = fitz.Rect(0, 0, paper_rect.height, paper_rect.width)   # landscape
+
+    out = fitz.open()
+    page = out.new_page(width=paper_rect.width, height=paper_rect.height)
+
+    # Largest size that fits inside the margins without distorting,
+    # centred on the page.
+    avail_w = paper_rect.width - 2 * page_margin_pt
+    avail_h = paper_rect.height - 2 * page_margin_pt
+    fit = min(avail_w / diagram_rect.width, avail_h / diagram_rect.height)
+    w, h = diagram_rect.width * fit, diagram_rect.height * fit
+    x0 = (paper_rect.width - w) / 2
+    y0 = (paper_rect.height - h) / 2
+    page.show_pdf_page(fitz.Rect(x0, y0, x0 + w, y0 + h), diagram, 0)
+
+    pdf_bytes = out.tobytes(garbage=3, deflate=True)
+    out.close()
+    diagram.close()
+    return pdf_bytes
+
+
+def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
+                       swing, handle_side, sash_margin_mm):
+    """
+    Draw the diagram onto a new one-page fitz.Document and return it.
+    Shared by draw_window_diagram() (PNG preview) and
+    draw_window_diagram_pdf() (PDF), so both always show exactly the
+    same drawing. Arguments as documented on draw_window_diagram().
+    The caller is responsible for closing the returned document.
     """
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError(f"width_mm and height_mm must both be positive (got {width_mm}, {height_mm})")
@@ -168,10 +233,7 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     page.insert_text((dim_x + 10, (y0 + y1) / 2 + 5), height_label,
                       fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
 
-    pix = page.get_pixmap(dpi=dpi)
-    png_bytes = pix.tobytes('png')
-    doc.close()
-    return png_bytes
+    return doc
 
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,

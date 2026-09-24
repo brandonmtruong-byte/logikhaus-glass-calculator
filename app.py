@@ -19,11 +19,11 @@ from modules.steps import (
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
-from modules.window_diagram import draw_window_diagram
+from modules.window_diagram import draw_window_diagram, draw_window_diagram_pdf
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDFixr",
+    page_title="Logikhaus Glass Calculator",
     page_icon="🪟",
     layout="centered"
 )
@@ -819,3 +819,17 @@ elif st.session_state.active_view == 'Window Diagram Creator':
         int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
     )
     st.image(diagram_png, width=display_width)
+
+    # Full-quality version: the same drawing as vector PDF on a blank A4
+    # page, sharp at any zoom and ready to print.
+    diagram_pdf = draw_window_diagram_pdf(
+        window_width_mm, window_height_mm,
+        swing=window_swing, handle_side=window_handle_side.lower(),
+    )
+    st.download_button(
+        "Download PDF",
+        data=diagram_pdf,
+        file_name=f"Window_Diagram_{window_width_mm}x{window_height_mm}.pdf",
+        mime="application/pdf",
+        key="window_diagram_pdf_download",
+    )
