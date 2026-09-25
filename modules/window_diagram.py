@@ -41,7 +41,7 @@ PDF_PAGE_MARGIN_PT = 40
 # frame profile is the same thickness whatever the window size, so this is
 # in mm rather than a fraction of the window. Scaled with the window's own
 # mm-to-points factor, like everything else.
-FRAME_THICKNESS_MM = 64
+FRAME_THICKNESS_MM = 45
 # Windows whose shorter side is below this get a proportionally thinner
 # frame (e.g. 300 mm -> half thickness), so small windows keep some glass.
 # Every reference window's shorter side was at least 600 mm.
