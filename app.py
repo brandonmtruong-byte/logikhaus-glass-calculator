@@ -489,9 +489,10 @@ if st.session_state.active_view == 'PDF Modifier':
         render_eyebrow("All steps complete")
         # Work on a copy so the in-app document isn't altered on every rerun.
         out_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
-        # Shrink images to 300 ppi at the size they're printed. The product
-        # photos are ~2000 ppi, far more detail than print can show.
-        out_doc.rewrite_images(dpi_threshold=950, dpi_target=900, quality=95,
+        # Shrink images to ~1000 ppi at the size they're printed (sharp on
+        # screen when zoomed; ~5 MB with 10 product photos). The product
+        # photos arrive at ~2000 ppi, far more detail than needed.
+        out_doc.rewrite_images(dpi_threshold=1050, dpi_target=1000, quality=95,
                                lossy=True, lossless=True)
         # Compress everything (inserted PNGs are otherwise stored as raw
         # pixels) and drop duplicate/unused objects.
@@ -801,6 +802,11 @@ elif st.session_state.active_view == 'Window Diagram Creator':
     col_swing, col_handle = st.columns(2)
     with col_swing:
         window_swing = st.toggle("Opening sash", value=False, key="window_diagram_swing")
+        # Adds the tilt lines on top of the standard side-hung ones.
+        window_tilt = st.toggle(
+            "Tilt and turn", value=False, key="window_diagram_tilt",
+            disabled=not window_swing,
+        )
     with col_handle:
         # Only matters when there's a sash to put the handle on.
         window_handle_side = st.radio(
@@ -813,6 +819,7 @@ elif st.session_state.active_view == 'Window Diagram Creator':
     diagram_png = draw_window_diagram(
         window_width_mm, window_height_mm,
         swing=window_swing, handle_side=window_handle_side.lower(),
+        tilt=window_tilt,
     )
 
     st.markdown("---")
@@ -834,6 +841,7 @@ elif st.session_state.active_view == 'Window Diagram Creator':
     diagram_pdf = draw_window_diagram_pdf(
         window_width_mm, window_height_mm,
         swing=window_swing, handle_side=window_handle_side.lower(),
+        tilt=window_tilt,
     )
     st.download_button(
         "Download PDF",
