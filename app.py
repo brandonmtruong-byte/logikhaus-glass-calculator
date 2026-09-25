@@ -487,7 +487,16 @@ if st.session_state.active_view == 'PDF Modifier':
     # ── All steps done: download ────────────────────────────────────────
     if st.session_state.current_step >= len(STEP_ORDER):
         render_eyebrow("All steps complete")
-        out_bytes = doc.tobytes()
+        # Work on a copy so the in-app document isn't altered on every rerun.
+        out_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
+        # Shrink images to 300 ppi at the size they're printed. The product
+        # photos are ~2000 ppi, far more detail than print can show.
+        out_doc.rewrite_images(dpi_threshold=350, dpi_target=300, quality=85,
+                               lossy=True, lossless=True)
+        # Compress everything (inserted PNGs are otherwise stored as raw
+        # pixels) and drop duplicate/unused objects.
+        out_bytes = out_doc.tobytes(garbage=3, deflate=True)
+        out_doc.close()
         out_name  = st.session_state.file_name.replace('.pdf', '_processed.pdf')
         st.download_button(
             label="Download annotated PDF",
