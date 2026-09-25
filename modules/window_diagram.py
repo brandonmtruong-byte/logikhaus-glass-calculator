@@ -46,7 +46,7 @@ FRAME_THICKNESS_MM = 50
 # frame (e.g. 300 mm -> half thickness), so small windows keep some glass.
 # Every reference window's shorter side was at least 600 mm.
 FRAME_REFERENCE_SIZE_MM = 600
-FRAME_COLOR = (0.91, 0.82, 0.63)   # tan
+FRAME_COLOR = (0.95, 0.86, 0.71)   # tan
 GLASS_COLOR = (0.75, 0.24, 0.62)   # magenta, matching the reference image
 
 # ── Opening sash ("swing") ──────────────────────────────────────────────
