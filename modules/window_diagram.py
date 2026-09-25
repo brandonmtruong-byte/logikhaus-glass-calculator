@@ -36,7 +36,16 @@ LABEL_FONTSIZE = 16
 # on the page, in points (72 pt = 1 inch, so 40 pt is about 14 mm).
 PDF_PAGE_MARGIN_PT = 40
 
-FRAME_THICKNESS_RATIO = 0.045   # frame border as a fraction of the shorter side
+# Fixed frame thickness in real mm, measured from reference drawings
+# (about 64-66 mm on windows from 800 x 1300 up to 1000 x 2415). A real
+# frame profile is the same thickness whatever the window size, so this is
+# in mm rather than a fraction of the window. Scaled with the window's own
+# mm-to-points factor, like everything else.
+FRAME_THICKNESS_MM = 64
+# Windows whose shorter side is below this get a proportionally thinner
+# frame (e.g. 300 mm -> half thickness), so small windows keep some glass.
+# Every reference window's shorter side was at least 600 mm.
+FRAME_REFERENCE_SIZE_MM = 600
 FRAME_COLOR = (0.91, 0.82, 0.63)   # tan
 GLASS_COLOR = (0.75, 0.24, 0.62)   # magenta, matching the reference image
 
@@ -189,7 +198,9 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
     x1, y1 = x0 + draw_w, y0 + draw_h
     outer = fitz.Rect(x0, y0, x1, y1)
 
-    frame_thickness = min(draw_w, draw_h) * FRAME_THICKNESS_RATIO
+    shorter_side_mm = min(width_mm, height_mm)
+    frame_thickness = (FRAME_THICKNESS_MM * scale
+                       * min(1.0, shorter_side_mm / FRAME_REFERENCE_SIZE_MM))
     inner = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
                        x1 - frame_thickness, y1 - frame_thickness)
 
