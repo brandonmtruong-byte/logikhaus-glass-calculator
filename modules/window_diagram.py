@@ -41,7 +41,7 @@ PDF_PAGE_MARGIN_PT = 40
 # frame profile is the same thickness whatever the window size, so this is
 # in mm rather than a fraction of the window. Scaled with the window's own
 # mm-to-points factor, like everything else.
-FRAME_THICKNESS_MM = 45
+FRAME_THICKNESS_MM = 64
 # Windows whose shorter side is below this get a proportionally thinner
 # frame (e.g. 300 mm -> half thickness), so small windows keep some glass.
 # Every reference window's shorter side was at least 600 mm.
@@ -95,9 +95,19 @@ HANDLE_COLOR = (0, 0, 0)
 
 LINE_COLOR = (0.2, 0.2, 0.2)
 
+# Opening lines: the thin dashed lines on the sash glass that show how it
+# opens. The sash always gets the side-hung "turn" lines (from the two
+# hinge-side corners to the middle of the handle side); tilt and turn adds
+# the "tilt" lines too (from the two bottom corners up to the middle of
+# the top). Dash pattern is in points: 4.5 pt dash, 3 pt gap.
+OPENING_LINE_COLOR = (0.25, 0.25, 0.25)
+OPENING_LINE_WIDTH = 0.5
+OPENING_LINE_DASHES = '[4.5 3] 0'
+
 
 def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100,
-                        swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM):
+                        swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
+                        tilt=False):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
@@ -117,9 +127,12 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         Only used when swing is True.
     sash_margin_mm: how much of the fixed frame shows around the sash,
         in mm (default SASH_MARGIN_MM). Only used when swing is True.
+    tilt: True adds the tilt-and-turn opening lines (bottom corners up to
+        the middle of the top) to the standard side-hung ones. Only used
+        when swing is True.
     """
     doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
-                             swing, handle_side, sash_margin_mm)
+                             swing, handle_side, sash_margin_mm, tilt)
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -128,7 +141,7 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
 
 def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR,
                             swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
-                            paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
+                            tilt=False, paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
     on a blank page (A4 by default) and enlarged to fill it, centred.
@@ -144,7 +157,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     page_margin_pt: blank border around the diagram, in points (72 pt = 1 inch).
     """
     diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
-                                 swing, handle_side, sash_margin_mm)
+                                 swing, handle_side, sash_margin_mm, tilt)
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -171,7 +184,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
 
 
 def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
-                       swing, handle_side, sash_margin_mm):
+                       swing, handle_side, sash_margin_mm, tilt):
     """
     Draw the diagram onto a new one-page fitz.Document and return it.
     Shared by draw_window_diagram() (PNG preview) and
@@ -223,7 +236,7 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
 
     if swing:
         _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-                   sash_margin_mm)
+                   sash_margin_mm, tilt)
 
     # Width dimension line (below)
     dim_y = y1 + DIM_GAP
@@ -248,7 +261,7 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
 
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-               sash_margin_mm):
+               sash_margin_mm, tilt):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -295,10 +308,42 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     page.draw_line((glass.x0, sash.y0), (glass.x0, sash.y1), color=LINE_COLOR, width=1.2)
     page.draw_line((glass.x1, sash.y0), (glass.x1, sash.y1), color=LINE_COLOR, width=1.2)
 
-    # Handle: centred on the glass edge on the chosen side.
+    _draw_opening_lines(page, glass, handle_side, tilt)
+
+    # Handle: centred on the glass edge on the chosen side. Drawn after
+    # the opening lines so it sits on top of them.
     edge_x   = glass.x1 if handle_side == 'right' else glass.x0
     handle_y = outer.y1 - outer.height * HANDLE_HEIGHT_RATIO
     half_len = max(HANDLE_LENGTH_MM * part_scale, HANDLE_MIN_LENGTH_PT) / 2
     thickness = max(HANDLE_THICKNESS_MM * part_scale, HANDLE_MIN_THICKNESS_PT)
     page.draw_line((edge_x - half_len, handle_y), (edge_x + half_len, handle_y),
                    color=HANDLE_COLOR, width=thickness, lineCap=1)
+
+
+def _draw_opening_lines(page, glass, handle_side, tilt):
+    """
+    Draw the dashed opening lines on the sash glass.
+
+    Turn (always): from the top and bottom corners on the HINGE side (the
+    side without the handle) to the middle of the handle side, making a
+    sideways "V" that points at the handle.
+
+    Tilt (only if tilt is True): from the two bottom corners up to the
+    middle of the top edge, making an upside-down "V" -- the sash tilts
+    in from the top, hinged along the bottom.
+    """
+    style = dict(color=OPENING_LINE_COLOR, width=OPENING_LINE_WIDTH,
+                 dashes=OPENING_LINE_DASHES)
+
+    if handle_side == 'right':
+        hinge_x, handle_x = glass.x0, glass.x1
+    else:
+        hinge_x, handle_x = glass.x1, glass.x0
+    handle_mid = (handle_x, (glass.y0 + glass.y1) / 2)
+    page.draw_line((hinge_x, glass.y0), handle_mid, **style)
+    page.draw_line((hinge_x, glass.y1), handle_mid, **style)
+
+    if tilt:
+        top_mid = ((glass.x0 + glass.x1) / 2, glass.y0)
+        page.draw_line((glass.x0, glass.y1), top_mid, **style)
+        page.draw_line((glass.x1, glass.y1), top_mid, **style)
