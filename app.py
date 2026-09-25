@@ -491,7 +491,7 @@ if st.session_state.active_view == 'PDF Modifier':
         out_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
         # Shrink images to 300 ppi at the size they're printed. The product
         # photos are ~2000 ppi, far more detail than print can show.
-        out_doc.rewrite_images(dpi_threshold=650, dpi_target=600, quality=95,
+        out_doc.rewrite_images(dpi_threshold=900, dpi_target=900, quality=95,
                                lossy=True, lossless=True)
         # Compress everything (inserted PNGs are otherwise stored as raw
         # pixels) and drop duplicate/unused objects.
