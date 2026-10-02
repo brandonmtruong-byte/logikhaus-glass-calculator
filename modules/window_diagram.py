@@ -105,11 +105,22 @@ OPENING_LINE_COLOR = (0.25, 0.25, 0.25)
 OPENING_LINE_WIDTH = 0.5
 OPENING_LINE_DASHES = '[4.5 3] 0'
 
+# Sliding sash arrow: a solid line across the middle of the sliding glass,
+# pointing the way it slides (towards the fixed half), with an open
+# arrowhead. Lengths are fractions of the glass width, from the reference
+# drawings (the arrow runs from about 12% to 88% of the glass).
+SLIDE_ARROW_INSET_RATIO = 0.12
+SLIDE_ARROW_HEAD_RATIO  = 0.13    # arrowhead length, as a fraction of the arrow
+SLIDE_ARROW_HEAD_MAX_PT = 14
+SLIDE_ARROW_COLOR = (0.25, 0.25, 0.25)
+SLIDE_ARROW_WIDTH = 0.8
+
 
 def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100,
                         swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                         tilt=False, split=False, swing_2=False, handle_side_2='left',
-                        tilt_2=False, tilt_only=False, tilt_only_2=False):
+                        tilt_2=False, tilt_only=False, tilt_only_2=False,
+                        slide=False, slide_side='left'):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
@@ -142,10 +153,19 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         swing / handle_side / tilt / tilt_only then apply to the LEFT
         pane, and swing_2 / handle_side_2 / tilt_2 / tilt_only_2 to the
         RIGHT pane. The *_2 options are ignored when split is False.
+    slide: True draws a sliding window/door: divided into two equal
+        halves (like split), one a sliding sash with an arrow pointing
+        towards the other, which is fixed glass. Overrides split, swing
+        and all the *_2 options. No handle is drawn on the sliding sash.
+        tilt_only adds the tilt lines to it; tilt adds the tilt lines plus
+        the side-hung lines (pointing to handle_side).
+    slide_side: 'left' or 'right' -- which half slides. Only used when
+        slide is True.
     """
     doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
                              _pane_options(swing, handle_side, tilt, tilt_only, split,
-                                           swing_2, handle_side_2, tilt_2, tilt_only_2))
+                                           swing_2, handle_side_2, tilt_2, tilt_only_2,
+                                           slide, slide_side))
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -156,6 +176,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
                             swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                             tilt=False, split=False, swing_2=False, handle_side_2='left',
                             tilt_2=False, tilt_only=False, tilt_only_2=False,
+                            slide=False, slide_side='left',
                             paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
@@ -173,7 +194,8 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     """
     diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
                                  _pane_options(swing, handle_side, tilt, tilt_only, split,
-                                               swing_2, handle_side_2, tilt_2, tilt_only_2))
+                                               swing_2, handle_side_2, tilt_2, tilt_only_2,
+                                           slide, slide_side))
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -200,15 +222,29 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
 
 
 def _pane_options(swing, handle_side, tilt, tilt_only, split,
-                  swing_2, handle_side_2, tilt_2, tilt_only_2):
+                  swing_2, handle_side_2, tilt_2, tilt_only_2,
+                  slide=False, slide_side='left'):
     """
     Turn the public arguments into one options dict per pane (one pane,
-    or two side by side when split), validating the handle sides.
+    or two side by side when split or sliding), validating the sides.
+    Each pane's 'slide_dir' is the direction its sash slides ('left' /
+    'right'), or None for a normal (non-sliding) pane.
     """
-    panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only)]
-    if split:
-        panes.append(dict(swing=swing_2, handle_side=handle_side_2, tilt=tilt_2,
-                          tilt_only=tilt_only_2))
+    if slide:
+        if slide_side not in ('left', 'right'):
+            raise ValueError(f"slide_side must be 'left' or 'right' (got {slide_side!r})")
+        # The sliding half slides towards the fixed half.
+        slider = dict(swing=True, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only,
+                      slide_dir='right' if slide_side == 'left' else 'left')
+        fixed = dict(swing=False, handle_side='left', tilt=False, tilt_only=False,
+                     slide_dir=None)
+        panes = [slider, fixed] if slide_side == 'left' else [fixed, slider]
+    else:
+        panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only,
+                      slide_dir=None)]
+        if split:
+            panes.append(dict(swing=swing_2, handle_side=handle_side_2, tilt=tilt_2,
+                              tilt_only=tilt_only_2, slide_dir=None))
     for pane in panes:
         if pane['handle_side'] not in ('left', 'right'):
             raise ValueError(f"handle side must be 'left' or 'right' (got {pane['handle_side']!r})")
@@ -301,7 +337,7 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         if options['swing']:
             _draw_sash(page, pane_rect, scale, frame_thickness, frame_color, glass_color,
                        options['handle_side'], sash_margin_mm, options['tilt'], mullion_side,
-                       options['tilt_only'])
+                       options['tilt_only'], options['slide_dir'])
 
     # Width dimension line (below). Split windows get each pane's width
     # here, plus the overall width on a second line further down.
@@ -341,7 +377,7 @@ def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
 
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-               sash_margin_mm, tilt, mullion_side=None, tilt_only=False):
+               sash_margin_mm, tilt, mullion_side=None, tilt_only=False, slide_dir=None):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -355,6 +391,10 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     tilt_only: True puts the handle in the middle of the top (as a short
         vertical bar across the glass edge) and draws only the tilt lines;
         handle_side and tilt are then ignored.
+    slide_dir: 'left' / 'right' for a SLIDING sash -- draws an arrow
+        pointing that way and no handle; opening lines only if tilt
+        (tilt + side-hung lines) or tilt_only (tilt lines) is set. None
+        for a normal opening sash.
 
     Parts are drawn at their real mm sizes on panes whose shorter side
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
@@ -396,6 +436,13 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     # meet the stiles.
     page.draw_line((glass.x0, sash.y0), (glass.x0, sash.y1), color=LINE_COLOR, width=1.2)
     page.draw_line((glass.x1, sash.y0), (glass.x1, sash.y1), color=LINE_COLOR, width=1.2)
+
+    if slide_dir is not None:
+        # Sliding sash: optional tilt lines, the slide arrow, no handle.
+        if tilt or tilt_only:
+            _draw_opening_lines(page, glass, handle_side, tilt, tilt_only)
+        _draw_slide_arrow(page, glass, slide_dir)
+        return
 
     _draw_opening_lines(page, glass, handle_side, tilt, tilt_only)
 
@@ -447,3 +494,23 @@ def _draw_opening_lines(page, glass, handle_side, tilt, tilt_only=False):
         top_mid = ((glass.x0 + glass.x1) / 2, glass.y0)
         page.draw_line((glass.x0, glass.y1), top_mid, **style)
         page.draw_line((glass.x1, glass.y1), top_mid, **style)
+
+
+def _draw_slide_arrow(page, glass, direction):
+    """
+    Solid arrow across the middle of a sliding sash's glass, pointing
+    `direction` ('left' or 'right'), with an open (two-line) arrowhead.
+    """
+    inset = glass.width * SLIDE_ARROW_INSET_RATIO
+    y = (glass.y0 + glass.y1) / 2
+    if direction == 'right':
+        tail_x, tip_x = glass.x0 + inset, glass.x1 - inset
+    else:
+        tail_x, tip_x = glass.x1 - inset, glass.x0 + inset
+    style = dict(color=SLIDE_ARROW_COLOR, width=SLIDE_ARROW_WIDTH, lineCap=1)
+    page.draw_line((tail_x, y), (tip_x, y), **style)
+
+    head = min(abs(tip_x - tail_x) * SLIDE_ARROW_HEAD_RATIO, SLIDE_ARROW_HEAD_MAX_PT)
+    back = head if direction == 'left' else -head      # arrowhead points back from the tip
+    page.draw_line((tip_x, y), (tip_x + back, y - head * 0.6), **style)
+    page.draw_line((tip_x, y), (tip_x + back, y + head * 0.6), **style)

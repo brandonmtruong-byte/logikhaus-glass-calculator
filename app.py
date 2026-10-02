@@ -827,33 +827,57 @@ elif st.session_state.active_view == 'Quote Estimator':
     # the "window_diagram_panel" rule in styles.py).
     col_options, col_diagram = st.columns(2, gap="medium")
 
-    def window_pane_controls(key_suffix, default_handle_side):
-        """Opening sash / tilt and turn / tilt only / handle side for one pane."""
-        # Read before the widgets are drawn, so "Tilt and turn" and the
-        # handle side can be greyed out while "Tilt only" is on.
+    def window_pane_controls(key_suffix, default_handle_side, allow_slide=False):
+        """
+        Opening sash / sliding / tilt and turn / tilt only / handle side for
+        one pane. allow_slide adds the Sliding toggle and its side choice
+        (single, unsplit windows only -- sliding already divides the window
+        in two). Returns (swing, tilt, tilt_only, handle_side, slide, slide_side).
+        """
+        # Read before the widgets are drawn, so options that don't apply
+        # can be greyed out straight away.
         tilt_only_on = st.session_state.get(f"window_diagram_tilt_only{key_suffix}", False)
+        slide_on = allow_slide and st.session_state.get("window_diagram_slide", False)
+        tilt_on = st.session_state.get(f"window_diagram_tilt{key_suffix}", False)
+
         swing = st.toggle(
-            "Opening sash", value=False, key=f"window_diagram_swing{key_suffix}"
+            "Opening sash", value=False, key=f"window_diagram_swing{key_suffix}",
+            disabled=slide_on,
         )
-        # Adds the tilt lines on top of the standard side-hung ones.
+        slide = False
+        if allow_slide:
+            # Divides the window in two: one half slides, the other is fixed.
+            slide = st.toggle("Sliding", value=False, key="window_diagram_slide")
+        sash_on = (swing and not slide) or slide
+
+        # Tilt + side-hung lines (on a sliding sash too).
         tilt = st.toggle(
             "Tilt and turn", value=False, key=f"window_diagram_tilt{key_suffix}",
-            disabled=not swing or tilt_only_on,
+            disabled=not sash_on or tilt_only_on,
         )
-        # Handle at the top middle, tilt lines only. Overrides the two
-        # options above it.
+        # Tilt lines only. On an opening sash the handle moves to the top
+        # middle; overrides "Tilt and turn".
         tilt_only = st.toggle(
             "Tilt only", value=False, key=f"window_diagram_tilt_only{key_suffix}",
-            disabled=not swing,
+            disabled=not sash_on,
         )
-        # Only matters for a side handle (not tilt only).
+        # Side handle (opening sash), or which way the side-hung lines
+        # point (sliding sash with tilt and turn).
         handle_side = st.radio(
             "Handle side", ["Left", "Right"],
             index=["Left", "Right"].index(default_handle_side), horizontal=True,
             key=f"window_diagram_handle_side{key_suffix}",
-            disabled=not swing or tilt_only_on,
+            disabled=(not sash_on or tilt_only_on
+                      or (slide_on and not tilt_on)),
         )
-        return swing, tilt, tilt_only, handle_side.lower()
+        slide_side = "left"
+        if allow_slide:
+            slide_side = st.radio(
+                "Sliding side", ["Left", "Right"], index=0, horizontal=True,
+                key="window_diagram_slide_side", disabled=not slide,
+            ).lower()
+        return (swing and not slide, tilt, tilt_only, handle_side.lower(),
+                slide, slide_side)
 
     with col_options:
         render_eyebrow("Window dimensions")
@@ -869,8 +893,10 @@ elif st.session_state.active_view == 'Quote Estimator':
 
         # Split: the overall size above stays the same, divided into two
         # equal panes side by side, each with its own options.
+        # Greyed out while Sliding is on, which already divides the window.
         window_split = st.checkbox(
-            "Split into two panes", value=False, key="window_diagram_split"
+            "Split into two panes", value=False, key="window_diagram_split",
+            disabled=st.session_state.get("window_diagram_slide", False),
         )
 
         # Same widget keys for the single window and the left pane, so a
@@ -879,17 +905,17 @@ elif st.session_state.active_view == 'Quote Estimator':
             col_left_pane, col_right_pane = st.columns(2)
             with col_left_pane:
                 render_eyebrow("Left pane")
-                window_swing, window_tilt, window_tilt_only, window_handle_side = \
-                    window_pane_controls("", "Right")
+                (window_swing, window_tilt, window_tilt_only, window_handle_side,
+                 window_slide, window_slide_side) = window_pane_controls("", "Right")
             with col_right_pane:
                 render_eyebrow("Right pane")
                 # Handle defaults to the left, so a pair meets in the middle.
-                window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
-                    window_pane_controls("_2", "Left")
+                (window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2,
+                 _, _) = window_pane_controls("_2", "Left")
         else:
             render_eyebrow("Sash")
-            window_swing, window_tilt, window_tilt_only, window_handle_side = \
-                window_pane_controls("", "Right")
+            (window_swing, window_tilt, window_tilt_only, window_handle_side,
+             window_slide, window_slide_side) = window_pane_controls("", "Right", allow_slide=True)
             window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
                 False, False, False, "left"
 
@@ -899,6 +925,7 @@ elif st.session_state.active_view == 'Quote Estimator':
         split=window_split,
         swing_2=window_swing_2, handle_side_2=window_handle_side_2, tilt_2=window_tilt_2,
         tilt_only_2=window_tilt_only_2,
+        slide=window_slide, slide_side=window_slide_side,
     )
 
     with col_diagram:
@@ -929,7 +956,8 @@ elif st.session_state.active_view == 'Quote Estimator':
                 "Download PDF",
                 data=diagram_pdf,
                 file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
-                           f"{'_split' if window_split else ''}.pdf"),
+                           f"{'_split' if window_split else ''}"
+                           f"{'_sliding' if window_slide else ''}.pdf"),
                 mime="application/pdf",
                 key="window_diagram_pdf_download",
             )
