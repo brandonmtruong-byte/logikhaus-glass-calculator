@@ -24,7 +24,7 @@ from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus Glass Calculator",
+    page_title="Logikhaus PDF Fixr",
     page_icon="🪟",
     layout="centered"
 )
@@ -237,7 +237,7 @@ def render_legend_preview(status):
         st.markdown('<div class="status-box">Legend page already present- not duplicated</div>',
                      unsafe_allow_html=True)
     elif status == 'missing_file':
-        st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder- legend page was not added.')
+        st.warning('LEGEND page for Schedule.pdf not found in assets/templates - legend page was not added.')
 
 
 def start_new_document(file_bytes, file_name, unique_id):
@@ -696,7 +696,7 @@ elif st.session_state.active_view == 'Certificate Creator':
                 use_container_width=True,
             )
         else:
-            st.error("Window Compliance Certificate template not found in the app folder.")
+            st.error("Window Compliance Certificate template not found in assets/certificates.")
 
 
 # ═════════════════════════════════════════════════════════════════════════

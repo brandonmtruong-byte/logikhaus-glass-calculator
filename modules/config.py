@@ -12,16 +12,19 @@ import fitz
 # Repo root = one level up from this file (modules/config.py -> repo root)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Static files (logo, certificate PDFs, templates) live under assets/
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+
 # ── Glass weight calculator (Module 2) ──────────────────────────────────────
 SHEET_ID      = '1GLWQq3ruw1IARJ1jIQs4Be_KPNk1LXSx-1IAIZCfpY0'
 GLASS_DENSITY = 2.5   # kg per m² per mm
 
 # ── Logo stamper (Module 1) ─────────────────────────────────────────────────
-LOGO_PATH = os.path.join(BASE_DIR, "Logikhaus_logo.jpg")
+LOGO_PATH = os.path.join(ASSETS_DIR, "images", "Logikhaus_logo.jpg")
 LOGO_RECT = fitz.Rect(20, 25, 138, 118)   # position of the stamped logo on page 1
 
 # ── Legend page adder (Module 3) ────────────────────────────────────────────
-LEGEND_PDF_PATH = os.path.join(BASE_DIR, "LEGEND page for Schedule.pdf")
+LEGEND_PDF_PATH = os.path.join(ASSETS_DIR, "templates", "LEGEND page for Schedule.pdf")
 LEGEND_KEYWORDS = ["LEGEND", "Codes (left column) are in alphabetical order"]
 
 # ── Frame code data + matcher (Modules 4 & 5) ───────────────────────────────
@@ -31,19 +34,19 @@ FRAME_SHEET_ID  = '1Ieyvx0ZgSBToQFCDGXM8d8xK3zaxqKnXmLdK8ir79n4'
 FRAME_RULES_TAB = 'RULESUPDATE'
 
 # ── Schedule text editor (Step 2 — vendored from jennynt-LGH/Schedule-Editor) ─
-TEMPLATE_XLSX_PATH = os.path.join(BASE_DIR, "template_instructions.xlsx")
+TEMPLATE_XLSX_PATH = os.path.join(ASSETS_DIR, "templates", "template_instructions.xlsx")
 
 # ── Test files (dev-only shortcut, not part of the stepper flow) ────────────
 TEST_FILES_DIR = os.path.join(BASE_DIR, "Test Files")
 
 # ── Certificate Creator (separate tab, independent of the stepper) ─────────
-CERTIFICATE_TEMPLATE_PATH = os.path.join(BASE_DIR, "2026 Glass Compliance Certificate.pdf")
+CERTIFICATE_TEMPLATE_PATH = os.path.join(ASSETS_DIR, "certificates", "2026 Glass Compliance Certificate.pdf")
 
 # Two Window Compliance templates -- DG (double glazing) and TG (triple
 # glazing) -- picked between at runtime based on what extract_quote_data()
 # finds in the quote (see certificate_creator.pick_window_cert_template_path).
-WINDOW_CERT_TEMPLATE_DG_PATH = os.path.join(BASE_DIR, "Window Housing Compliance Certificate DG.pdf")
-WINDOW_CERT_TEMPLATE_TG_PATH = os.path.join(BASE_DIR, "Window Housing Compliance Certificate TG.pdf")
+WINDOW_CERT_TEMPLATE_DG_PATH = os.path.join(ASSETS_DIR, "certificates", "Window Housing Compliance Certificate DG.pdf")
+WINDOW_CERT_TEMPLATE_TG_PATH = os.path.join(ASSETS_DIR, "certificates", "Window Housing Compliance Certificate TG.pdf")
 
 # Google Sheets API scopes used by every module that reads a sheet.
 GOOGLE_SHEETS_SCOPES = [

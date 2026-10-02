@@ -5,6 +5,8 @@ Kept separate from app.py so tweaking colors/fonts never touches logic.
 
 import streamlit as st
 
+from .config import LOGO_PATH
+
 CUSTOM_CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -199,7 +201,7 @@ def render_header():
     """Logo + title header shown at the top of the page."""
     col_logo, col_title = st.columns([1, 3])
     with col_logo:
-        st.image("Logikhaus_logo.jpg", use_container_width=True)
+        st.image(LOGO_PATH, use_container_width=True)
     with col_title:
         st.markdown("""
         <div style="padding-top: 1rem;">
