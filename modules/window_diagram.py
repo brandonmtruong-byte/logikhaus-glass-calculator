@@ -109,7 +109,7 @@ OPENING_LINE_DASHES = '[4.5 3] 0'
 def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100,
                         swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                         tilt=False, split=False, swing_2=False, handle_side_2='left',
-                        tilt_2=False):
+                        tilt_2=False, tilt_only=False, tilt_only_2=False):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
@@ -133,16 +133,19 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     tilt: True adds the tilt-and-turn opening lines (bottom corners up to
         the middle of the top) to the standard side-hung ones. Only used
         when swing is True.
+    tilt_only: True draws a tilt-only sash instead: the handle sits in the
+        middle of the top, and only the tilt lines are drawn (no side-hung
+        ones). Overrides tilt and handle_side. Only used when swing is True.
     split: True divides the window into two equal panes, side by side,
         with a mullion (vertical frame member) between them. The overall
         size stays width_mm x height_mm; each pane is width_mm / 2 wide.
-        swing / handle_side / tilt then apply to the LEFT pane, and
-        swing_2 / handle_side_2 / tilt_2 to the RIGHT pane. The *_2
-        options are ignored when split is False.
+        swing / handle_side / tilt / tilt_only then apply to the LEFT
+        pane, and swing_2 / handle_side_2 / tilt_2 / tilt_only_2 to the
+        RIGHT pane. The *_2 options are ignored when split is False.
     """
     doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
-                             _pane_options(swing, handle_side, tilt, split,
-                                           swing_2, handle_side_2, tilt_2))
+                             _pane_options(swing, handle_side, tilt, tilt_only, split,
+                                           swing_2, handle_side_2, tilt_2, tilt_only_2))
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -152,7 +155,8 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
 def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR,
                             swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                             tilt=False, split=False, swing_2=False, handle_side_2='left',
-                            tilt_2=False, paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
+                            tilt_2=False, tilt_only=False, tilt_only_2=False,
+                            paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
     on a blank page (A4 by default) and enlarged to fill it, centred.
@@ -168,8 +172,8 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     page_margin_pt: blank border around the diagram, in points (72 pt = 1 inch).
     """
     diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
-                                 _pane_options(swing, handle_side, tilt, split,
-                                               swing_2, handle_side_2, tilt_2))
+                                 _pane_options(swing, handle_side, tilt, tilt_only, split,
+                                               swing_2, handle_side_2, tilt_2, tilt_only_2))
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -195,14 +199,16 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     return pdf_bytes
 
 
-def _pane_options(swing, handle_side, tilt, split, swing_2, handle_side_2, tilt_2):
+def _pane_options(swing, handle_side, tilt, tilt_only, split,
+                  swing_2, handle_side_2, tilt_2, tilt_only_2):
     """
     Turn the public arguments into one options dict per pane (one pane,
     or two side by side when split), validating the handle sides.
     """
-    panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt)]
+    panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only)]
     if split:
-        panes.append(dict(swing=swing_2, handle_side=handle_side_2, tilt=tilt_2))
+        panes.append(dict(swing=swing_2, handle_side=handle_side_2, tilt=tilt_2,
+                          tilt_only=tilt_only_2))
     for pane in panes:
         if pane['handle_side'] not in ('left', 'right'):
             raise ValueError(f"handle side must be 'left' or 'right' (got {pane['handle_side']!r})")
@@ -294,7 +300,8 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     for options, (pane_rect, mullion_side) in zip(panes, pane_layout):
         if options['swing']:
             _draw_sash(page, pane_rect, scale, frame_thickness, frame_color, glass_color,
-                       options['handle_side'], sash_margin_mm, options['tilt'], mullion_side)
+                       options['handle_side'], sash_margin_mm, options['tilt'], mullion_side,
+                       options['tilt_only'])
 
     # Width dimension line (below). Split windows get each pane's width
     # here, plus the overall width on a second line further down.
@@ -334,7 +341,7 @@ def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
 
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-               sash_margin_mm, tilt, mullion_side=None):
+               sash_margin_mm, tilt, mullion_side=None, tilt_only=False):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -345,6 +352,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     mullion_side: for a split window's pane, 'left' or 'right' -- the
         side facing the mullion, where the sash margin is halved. None
         for a single window.
+    tilt_only: True puts the handle in the middle of the top (as a short
+        vertical bar across the glass edge) and draws only the tilt lines;
+        handle_side and tilt are then ignored.
 
     Parts are drawn at their real mm sizes on panes whose shorter side
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
@@ -387,19 +397,27 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     page.draw_line((glass.x0, sash.y0), (glass.x0, sash.y1), color=LINE_COLOR, width=1.2)
     page.draw_line((glass.x1, sash.y0), (glass.x1, sash.y1), color=LINE_COLOR, width=1.2)
 
-    _draw_opening_lines(page, glass, handle_side, tilt)
+    _draw_opening_lines(page, glass, handle_side, tilt, tilt_only)
 
-    # Handle: centred on the glass edge on the chosen side. Drawn after
-    # the opening lines so it sits on top of them.
-    edge_x   = glass.x1 if handle_side == 'right' else glass.x0
-    handle_y = outer.y1 - outer.height * HANDLE_HEIGHT_RATIO
+    # Handle. Drawn after the opening lines so it sits on top of them.
     half_len = max(HANDLE_LENGTH_MM * part_scale, HANDLE_MIN_LENGTH_PT) / 2
     thickness = max(HANDLE_THICKNESS_MM * part_scale, HANDLE_MIN_THICKNESS_PT)
-    page.draw_line((edge_x - half_len, handle_y), (edge_x + half_len, handle_y),
-                   color=HANDLE_COLOR, width=thickness, lineCap=1)
+    if tilt_only:
+        # Tilt only: a vertical bar centred on the middle of the glass's
+        # top edge.
+        mid_x = (glass.x0 + glass.x1) / 2
+        page.draw_line((mid_x, glass.y0 - half_len), (mid_x, glass.y0 + half_len),
+                       color=HANDLE_COLOR, width=thickness, lineCap=1)
+    else:
+        # Side handle: a horizontal bar centred on the glass edge on the
+        # chosen side.
+        edge_x   = glass.x1 if handle_side == 'right' else glass.x0
+        handle_y = outer.y1 - outer.height * HANDLE_HEIGHT_RATIO
+        page.draw_line((edge_x - half_len, handle_y), (edge_x + half_len, handle_y),
+                       color=HANDLE_COLOR, width=thickness, lineCap=1)
 
 
-def _draw_opening_lines(page, glass, handle_side, tilt):
+def _draw_opening_lines(page, glass, handle_side, tilt, tilt_only=False):
     """
     Draw the dashed opening lines on the sash glass.
 
@@ -410,19 +428,22 @@ def _draw_opening_lines(page, glass, handle_side, tilt):
     Tilt (only if tilt is True): from the two bottom corners up to the
     middle of the top edge, making an upside-down "V" -- the sash tilts
     in from the top, hinged along the bottom.
+
+    Tilt only (tilt_only True): just the tilt lines, no turn lines.
     """
     style = dict(color=OPENING_LINE_COLOR, width=OPENING_LINE_WIDTH,
                  dashes=OPENING_LINE_DASHES)
 
-    if handle_side == 'right':
-        hinge_x, handle_x = glass.x0, glass.x1
-    else:
-        hinge_x, handle_x = glass.x1, glass.x0
-    handle_mid = (handle_x, (glass.y0 + glass.y1) / 2)
-    page.draw_line((hinge_x, glass.y0), handle_mid, **style)
-    page.draw_line((hinge_x, glass.y1), handle_mid, **style)
+    if not tilt_only:
+        if handle_side == 'right':
+            hinge_x, handle_x = glass.x0, glass.x1
+        else:
+            hinge_x, handle_x = glass.x1, glass.x0
+        handle_mid = (handle_x, (glass.y0 + glass.y1) / 2)
+        page.draw_line((hinge_x, glass.y0), handle_mid, **style)
+        page.draw_line((hinge_x, glass.y1), handle_mid, **style)
 
-    if tilt:
+    if tilt or tilt_only:
         top_mid = ((glass.x0 + glass.x1) / 2, glass.y0)
         page.draw_line((glass.x0, glass.y1), top_mid, **style)
         page.draw_line((glass.x1, glass.y1), top_mid, **style)

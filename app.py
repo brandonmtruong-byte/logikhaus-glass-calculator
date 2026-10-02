@@ -24,7 +24,7 @@ from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus Glass Calculator",
+    page_title="Logikhaus PDF Fixr",
     page_icon="🪟",
     layout="centered"
 )
@@ -841,7 +841,10 @@ elif st.session_state.active_view == 'Quote Estimator':
     )
 
     def window_pane_controls(key_suffix, default_handle_side):
-        """Opening sash / tilt and turn / handle side for one pane."""
+        """Opening sash / tilt and turn / tilt only / handle side for one pane."""
+        # Read before the widgets are drawn, so "Tilt and turn" and the
+        # handle side can be greyed out while "Tilt only" is on.
+        tilt_only_on = st.session_state.get(f"window_diagram_tilt_only{key_suffix}", False)
         col_swing, col_handle = st.columns(2)
         with col_swing:
             swing = st.toggle(
@@ -850,34 +853,46 @@ elif st.session_state.active_view == 'Quote Estimator':
             # Adds the tilt lines on top of the standard side-hung ones.
             tilt = st.toggle(
                 "Tilt and turn", value=False, key=f"window_diagram_tilt{key_suffix}",
+                disabled=not swing or tilt_only_on,
+            )
+            # Handle at the top middle, tilt lines only. Overrides the
+            # two options above it.
+            tilt_only = st.toggle(
+                "Tilt only", value=False, key=f"window_diagram_tilt_only{key_suffix}",
                 disabled=not swing,
             )
         with col_handle:
-            # Only matters when there's a sash to put the handle on.
+            # Only matters for a side handle (not tilt only).
             handle_side = st.radio(
                 "Handle side", ["Left", "Right"],
                 index=["Left", "Right"].index(default_handle_side), horizontal=True,
-                key=f"window_diagram_handle_side{key_suffix}", disabled=not swing,
+                key=f"window_diagram_handle_side{key_suffix}",
+                disabled=not swing or tilt_only_on,
             )
-        return swing, tilt, handle_side.lower()
+        return swing, tilt, tilt_only, handle_side.lower()
 
     if window_split:
         render_eyebrow("Left pane")
     # Same widget keys whether split or not, so the single window's
     # settings carry over as the left pane's when splitting.
-    window_swing, window_tilt, window_handle_side = window_pane_controls("", "Right")
+    window_swing, window_tilt, window_tilt_only, window_handle_side = \
+        window_pane_controls("", "Right")
 
     if window_split:
         render_eyebrow("Right pane")
         # Handle defaults to the left, so a pair meets in the middle.
-        window_swing_2, window_tilt_2, window_handle_side_2 = window_pane_controls("_2", "Left")
+        window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
+            window_pane_controls("_2", "Left")
     else:
-        window_swing_2, window_tilt_2, window_handle_side_2 = False, False, "left"
+        window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
+            False, False, False, "left"
 
     diagram_options = dict(
         swing=window_swing, handle_side=window_handle_side, tilt=window_tilt,
+        tilt_only=window_tilt_only,
         split=window_split,
         swing_2=window_swing_2, handle_side_2=window_handle_side_2, tilt_2=window_tilt_2,
+        tilt_only_2=window_tilt_only_2,
     )
 
     # No button, no gate -- this is cheap local vector drawing with no
