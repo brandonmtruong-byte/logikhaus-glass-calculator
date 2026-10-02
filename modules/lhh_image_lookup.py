@@ -19,6 +19,13 @@ format). Only Code and Description are read -- Hardware/Type/Brand/
 Name/Colour/Image columns are ignored, since Description is already a
 complete, pre-composed value in the sheet itself.
 
+BACKGROUND LOADING: the sheet read, the Drive folder walk and the image
+downloads are slow, and nothing needs them until the Hardware Schedule
+step. get_hardware_loader() (bottom of the SHEET/DRIVE sections) starts
+all of that on a background thread the first time it's called and returns
+immediately, so uploading a schedule and the first few steps can happen
+while it runs. See HardwareLoader.
+
 Drive folder: images now live in a NESTED folder structure (subfolders
 like "LHH0", "LHH1", "black set"...) rather than one flat folder, so
 the whole tree is walked recursively -- every image found at any depth,
@@ -30,6 +37,9 @@ space-separated, or no separator at all).
 
 import io
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 import gspread
@@ -80,16 +90,19 @@ def _read_lookup_from_worksheet(worksheet):
     return lookup
 
 
-@st.cache_data(ttl=300)
-def load_lhh_lookup():
+def _load_lhh_lookup_uncached(creds=None):
     """
     Read EVERY tab of the LHH sheet and merge them into one combined
     {code: {'description': ...}} lookup. If the same code somehow
     appears on more than one tab, whichever tab is read last wins --
     tabs are read in the order gspread reports them (left to right, as
     shown in the sheet's own tab bar).
+
+    Takes explicit credentials (default: build them from st.secrets) so
+    the background thread can use credentials that were created on the
+    main thread -- st.secrets shouldn't be touched from a worker thread.
     """
-    creds = get_google_credentials()
+    creds = creds or get_google_credentials()
     gc = gspread.authorize(creds)
     spreadsheet = gc.open_by_key(LHH_SHEET_ID)
 
@@ -99,14 +112,32 @@ def load_lhh_lookup():
     return combined_lookup
 
 
+@st.cache_data(ttl=300)
+def load_lhh_lookup():
+    """Blocking, cached version -- kept for anything that still wants it."""
+    return _load_lhh_lookup_uncached()
+
+
 # ═════════════════════════════════════════════════════════════════════════
 #  DRIVE FOLDER
 # ═════════════════════════════════════════════════════════════════════════
 
-def _drive_service():
+def _drive_service(creds=None):
     """Authenticated Drive API client, shared by list/download helpers."""
-    creds = get_google_credentials()
+    creds = creds or get_google_credentials()
     return build('drive', 'v3', credentials=creds)
+
+
+def _copy_creds(creds):
+    """
+    A private copy of the credentials for one worker thread. Drive
+    service objects (and token refreshes) aren't safe to share between
+    threads, so every worker gets its own.
+    """
+    try:
+        return creds.with_scopes(creds.scopes)
+    except Exception:
+        return creds
 
 
 def _list_children(service, folder_id):
@@ -146,8 +177,7 @@ def _list_children(service, folder_id):
     return subfolder_ids, images
 
 
-@st.cache_data(ttl=300)
-def list_drive_images():
+def _walk_drive_tree(service):
     """
     Return {filename: file_id} for every image file found ANYWHERE in
     the shared Drive folder's tree -- the folder itself, plus every
@@ -157,7 +187,6 @@ def list_drive_images():
     it (view access is enough, and that access extends to everything
     inside it) -- same account used for the Sheets connections.
     """
-    service = _drive_service()
     images = {}
     folders_to_visit = [LHH_DRIVE_FOLDER_ID]
 
@@ -170,9 +199,13 @@ def list_drive_images():
     return images
 
 
-def download_drive_image(file_id):
-    """Download a single image file's raw bytes from Drive by its file ID."""
-    service = _drive_service()
+@st.cache_data(ttl=300)
+def list_drive_images():
+    """Blocking, cached version -- kept for anything that still wants it."""
+    return _walk_drive_tree(_drive_service())
+
+
+def _download_with_service(service, file_id):
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     buffer = io.BytesIO()
     downloader = MediaIoBaseDownload(buffer, request)
@@ -180,6 +213,38 @@ def download_drive_image(file_id):
     while not done:
         _, done = downloader.next_chunk()
     return buffer.getvalue()
+
+
+def download_drive_image(file_id, creds=None):
+    """Download a single image file's raw bytes from Drive by its file ID."""
+    return _download_with_service(_drive_service(creds), file_id)
+
+
+def _download_many(file_ids, creds, on_done=None, workers=6):
+    """
+    Download several Drive files in parallel, one Drive service per
+    worker thread. Returns {file_id: bytes} for the ones that worked; a
+    file that fails is simply left out (the caller treats that as "no
+    image for that row"). `on_done(file_id, data)` is called as each one
+    finishes -- the background loader uses it to fill its cache bit by bit.
+    """
+    local = threading.local()
+
+    def work(file_id):
+        try:
+            if not hasattr(local, 'service'):
+                local.service = _drive_service(_copy_creds(creds))
+            data = _download_with_service(local.service, file_id)
+        except Exception:
+            return file_id, None
+        if on_done:
+            on_done(file_id, data)
+        return file_id, data
+
+    if not file_ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return {fid: data for fid, data in pool.map(work, file_ids) if data}
 
 
 def build_code_to_file_id_map(drive_images):
@@ -262,7 +327,7 @@ def _new_schedule_page(doc):
     return page, rows
 
 
-def build_hardware_schedule(codes, lookup, drive_images):
+def build_hardware_schedule(codes, lookup, drive_images, image_cache=None):
     """
     Build the Hardware Schedule as a standalone fitz.Document -- one or
     more pages, ROWS_PER_PAGE items per page, in the order `codes` is
@@ -274,10 +339,22 @@ def build_hardware_schedule(codes, lookup, drive_images):
     missing-fields handling. Same for a code with no matching Drive
     image: the row just has no image rather than erroring out.
 
+    image_cache: optional {file_id: bytes} (the background loader's
+    cache). Anything already in it isn't downloaded again; whatever is
+    missing is downloaded here, in parallel, and added to it.
+
     Returns the fitz.Document -- caller is responsible for closing it
     (or inserting its pages into another doc and then closing it).
     """
     code_to_file_id = build_code_to_file_id_map(drive_images)
+    if image_cache is None:
+        image_cache = {}
+
+    missing = [code_to_file_id[c] for c in codes
+               if c in code_to_file_id and code_to_file_id[c] not in image_cache]
+    if missing:
+        image_cache.update(_download_many(list(dict.fromkeys(missing)), get_google_credentials()))
+
     schedule_doc = fitz.open()
 
     page, rows = _new_schedule_page(schedule_doc)
@@ -298,13 +375,153 @@ def build_hardware_schedule(codes, lookup, drive_images):
                 fontsize=8, fontname='helv', color=(0.2, 0.2, 0.2),
             )
 
-        file_id = code_to_file_id.get(code)
-        if file_id:
-            image_bytes = download_drive_image(file_id)
-            pixmap = fitz.Pixmap(image_bytes)
-            img_rect = fit_image_rect(layout['image_box'], pixmap.width, pixmap.height)
-            page.insert_image(img_rect, stream=image_bytes)
+        image_bytes = image_cache.get(code_to_file_id.get(code))
+        if image_bytes:
+            try:
+                pixmap = fitz.Pixmap(image_bytes)
+                img_rect = fit_image_rect(layout['image_box'], pixmap.width, pixmap.height)
+                page.insert_image(img_rect, stream=image_bytes)
+            except Exception:
+                pass   # unreadable image -> row just has no image
 
         row_index += 1
 
     return schedule_doc
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  BACKGROUND LOADER
+# ═════════════════════════════════════════════════════════════════════════
+
+LOADER_MAX_AGE     = 900   # seconds before the sheet/folder data is refreshed
+ERROR_RETRY_AFTER  = 20    # seconds before a failed load is retried automatically
+MAX_PREFETCH       = 500   # don't pre-download every image if the folder is huge
+
+
+class HardwareLoader:
+    """
+    Loads everything the Hardware Schedule step needs on a background
+    thread, in this order:
+
+        1. the LHH sheet (code -> description)
+        2. the Drive folder index (filename -> file id)      -> status 'ready'
+        3. every image's bytes, in parallel (optional extra) -> prefetching
+
+    'ready' means steps 1-2 are done, which is all the schedule step
+    needs -- any image not downloaded yet is fetched on demand when the
+    schedule is built. Step 3 only makes that instant.
+
+    The thread never calls st.* and never touches st.secrets: the
+    credentials are built by the caller on the main thread and handed in.
+    While a REFRESH is running the previous (ready) loader stays usable
+    as `fallback`, so a refresh never makes the data disappear.
+    """
+
+    def __init__(self, creds, fallback=None, prefetch=True):
+        self._creds = creds
+        self._fallback = fallback
+        self._prefetch = prefetch
+        self.status = 'loading'            # 'loading' | 'ready' | 'error'
+        self.stage = 'Starting...'
+        self.error = None
+        self.lookup = None                 # {code: {'description': ...}}
+        self.images = None                 # {filename: file_id}
+        self.image_cache = dict(fallback.image_cache) if fallback else {}
+        self.prefetching = False
+        self.prefetch_total = 0
+        self.started_at = time.time()
+        self.finished_at = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name='hardware-loader')
+
+    def start(self):
+        self._thread.start()
+
+    def _run(self):
+        try:
+            self.stage = 'reading hardware sheet'
+            self.lookup = _load_lhh_lookup_uncached(_copy_creds(self._creds))
+            self.stage = 'indexing Drive images'
+            self.images = _walk_drive_tree(_drive_service(_copy_creds(self._creds)))
+        except Exception as e:
+            self.error = f'{type(e).__name__}: {e}'
+            self.status = 'error'
+            self.finished_at = time.time()
+            return
+        self.status = 'ready'
+        self.stage = 'ready'
+        self.finished_at = time.time()
+        self._fallback = None              # new data is live -- release the old copy
+        if self._prefetch:
+            self._prefetch_images()
+
+    def _prefetch_images(self):
+        ids = list(dict.fromkeys(build_code_to_file_id_map(self.images).values()))
+        ids = [i for i in ids if i not in self.image_cache]
+        if not ids or len(ids) > MAX_PREFETCH:
+            return
+        self.prefetch_total = len(self.image_cache) + len(ids)
+        self.prefetching = True
+        try:
+            _download_many(ids, self._creds, on_done=self.image_cache.__setitem__)
+        except Exception:
+            pass                           # prefetch is best-effort only
+        finally:
+            self.prefetching = False
+
+    def _live(self):
+        """Whichever loader currently has usable data (self, else the old one), or None."""
+        if self.status == 'ready':
+            return self
+        fb = self._fallback
+        return fb if fb is not None and fb.status == 'ready' else None
+
+    def data(self):
+        """(lookup, images, image_cache) once usable, otherwise None."""
+        live = self._live()
+        return (live.lookup, live.images, live.image_cache) if live else None
+
+    def snapshot(self):
+        """Plain dict for the UI -- safe to read at any moment."""
+        live = self._live()
+        return {
+            'status': self.status,
+            'ready': live is not None,
+            'stage': self.stage,
+            'error': self.error,
+            'codes': len(live.lookup) if live else 0,
+            'images': len(live.images) if live else 0,
+            'prefetching': self.prefetching,
+            'cached': len(self.image_cache),
+            'prefetch_total': self.prefetch_total,
+        }
+
+
+_loader = None
+_loader_lock = threading.Lock()
+
+
+def get_hardware_loader(force=False):
+    """
+    The one shared loader. The first call starts loading in the background
+    and returns straight away; later calls just return the same object
+    (until its data is LOADER_MAX_AGE old, or it failed ERROR_RETRY_AFTER
+    seconds ago, or force=True -- then a fresh load starts).
+
+    Must be called from the Streamlit script (main) thread, because that's
+    where the credentials get built from st.secrets.
+    """
+    global _loader
+    with _loader_lock:
+        ld = _loader
+        stale = (
+            ld is not None and ld.finished_at is not None and
+            time.time() - ld.finished_at > (ERROR_RETRY_AFTER if ld.status == 'error' else LOADER_MAX_AGE)
+        )
+        if ld is None or stale or force:
+            fallback = None
+            if ld is not None:
+                fallback = ld if ld.status == 'ready' else ld._live()
+                ld._fallback = None if ld is not fallback else ld._fallback
+            _loader = HardwareLoader(get_google_credentials(), fallback=fallback)
+            _loader.start()
+        return _loader

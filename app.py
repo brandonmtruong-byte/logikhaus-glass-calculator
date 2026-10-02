@@ -13,7 +13,7 @@ from modules.certificate_creator import (
     extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
     WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP, debug_quote_extraction,
 )
-from modules.lhh_image_lookup import load_lhh_lookup, list_drive_images
+from modules.lhh_image_lookup import get_hardware_loader
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
@@ -92,7 +92,7 @@ def render_mass_preview(result, doc):
     def highlight_row(row):
         original = rows[row.name]
         if original.get('_skip'):
-            return ['color: #bbb'] * len(row)
+            return ['color: #888'] * len(row)
         if 'No LHG' in str(row.get('Weight', '')) or 'skipped' in str(row.get('Weight', '')):
             return ['color: #c0392b'] * len(row)
         return [''] * len(row)
@@ -272,6 +272,17 @@ def sanitize_filename_part(text):
 # ═════════════════════════════════════════════════════════════════════════
 if st.session_state.active_view == 'PDF Modifier':
 
+    # ── Hardware data (sheet + Drive images): start loading in the BACKGROUND.
+    # get_hardware_loader() returns immediately; nothing needs this data until
+    # the Hardware Schedule step, so uploading a schedule and running the first
+    # few steps can happen while it loads. Started before the glass/frame loads
+    # below so it's already running during them.
+    hw_loader, hw_start_error = None, None
+    try:
+        hw_loader = get_hardware_loader()
+    except Exception as e:
+        hw_start_error = f'{type(e).__name__}: {e}'
+
     # ── Load reference data (Google Sheets - independent of any uploaded PDF)
     try:
         with st.spinner('Loading glass data from sheet...'):
@@ -299,19 +310,36 @@ if st.session_state.active_view == 'PDF Modifier':
         st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
                    f'({type(e).__name__}: {e})')
 
-    lhh_lookup, lhh_drive_images = None, None
-    try:
-        with st.spinner('Loading hardware lookup...'):
-            lhh_lookup = load_lhh_lookup()
-            lhh_drive_images = list_drive_images()
+    # Hardware status. This is a snapshot taken on each run (it does NOT refresh
+    # by itself -- an auto-refreshing box could interrupt a step part-way through
+    # applying); it updates the next time anything on the page is clicked.
+    hw = hw_loader.snapshot() if hw_loader else None
+    hw_data = hw_loader.data() if hw_loader else None      # (lookup, images, image_cache) or None
+    lhh_lookup, lhh_drive_images, lhh_image_cache = hw_data if hw_data else (None, None, None)
+
+    if hw is None:
+        st.warning(f'Could not start hardware lookup- the Hardware Schedule step will be skippable only. '
+                   f'({hw_start_error})')
+    elif hw['ready']:
+        caching = (f" - caching images in the background ({hw['cached']}/{hw['prefetch_total']})"
+                   if hw['prefetching'] else "")
         st.markdown(
             f'<div class="status-box">✓ Hardware lookup loaded - '
-            f'{len(lhh_lookup)} codes, {len(lhh_drive_images)} images</div>',
+            f'{hw["codes"]} codes, {hw["images"]} images{caching}</div>',
             unsafe_allow_html=True
         )
-    except Exception as e:
+    elif hw['status'] == 'error':
         st.warning(f'Could not load hardware lookup- the Hardware Schedule step will be skippable only. '
-                   f'({type(e).__name__}: {e})')
+                   f'({hw["error"]})')
+        if st.button('Retry hardware load', key='hw_retry', type='secondary'):
+            get_hardware_loader(force=True)
+            st.rerun()
+    else:
+        st.markdown(
+            f'<div class="status-box">⏳ Hardware data is loading in the background '
+            f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
+            unsafe_allow_html=True
+        )
 
     st.markdown("---")
 
@@ -400,7 +428,12 @@ if st.session_state.active_view == 'PDF Modifier':
                     lhh_lookup is None or lhh_drive_images is None
                 )
                 if hardware_data_missing:
-                    st.warning("Hardware lookup isn't available- this step can only be skipped.")
+                    if hw and hw['status'] == 'loading':
+                        st.info(f"Hardware data is still loading in the background ({hw['stage']}). "
+                                "Click Check again in a moment, or Skip.")
+                        st.button("Check again", key="hw_check_again", type="secondary")
+                    else:
+                        st.warning("Hardware lookup isn't available- this step can only be skipped.")
 
                 # Text replace step needs its own instructions .xlsx uploaded first
                 text_replace_xlsx = None
@@ -449,7 +482,7 @@ if st.session_state.active_view == 'PDF Modifier':
                             )
                         elif step_key == 'hardware_schedule':
                             st.session_state.step_results[step_key] = apply_hardware_schedule(
-                                doc, lhh_lookup, lhh_drive_images
+                                doc, lhh_lookup, lhh_drive_images, lhh_image_cache
                             )
                         elif step_key == 'legend':
                             st.session_state.step_results[step_key] = apply_legend(doc)

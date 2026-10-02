@@ -91,7 +91,7 @@ def apply_frame(doc, frame_codes, frame_rules, glass_type_lookup):
     return {'rows': rows, 'pages': pages, 'highlight_rects': highlight_rects}
 
 
-def apply_hardware_schedule(doc, lhh_lookup, drive_images):
+def apply_hardware_schedule(doc, lhh_lookup, drive_images, image_cache=None):
     """
     Scan the whole working document for LHH### codes, look each one up
     (sheet + Drive image), and append the resulting Hardware Schedule
@@ -106,6 +106,9 @@ def apply_hardware_schedule(doc, lhh_lookup, drive_images):
     below, so a load failure surfaces immediately at page-load time
     rather than only when this step is actually clicked.
 
+    image_cache is the background loader's {file_id: bytes} cache -- images
+    already in it aren't downloaded again.
+
     Returns {'codes': sorted list of codes found, 'pages_added': int}
     for the UI to show as a result -- there's no per-item "rows" table
     the way Mass/Frame have, since the generated pages themselves ARE
@@ -116,7 +119,7 @@ def apply_hardware_schedule(doc, lhh_lookup, drive_images):
     if not codes:
         return {'codes': [], 'pages_added': 0}
 
-    schedule_doc = build_hardware_schedule(codes, lhh_lookup, drive_images)
+    schedule_doc = build_hardware_schedule(codes, lhh_lookup, drive_images, image_cache)
     pages_added = schedule_doc.page_count
     doc.insert_pdf(schedule_doc)
     schedule_doc.close()

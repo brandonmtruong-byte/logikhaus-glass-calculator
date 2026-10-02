@@ -7,6 +7,11 @@ import streamlit as st
 
 from .config import LOGO_PATH
 
+# COLOURS: nothing here may assume a dark (or light) background. Text uses
+# `color: inherit` (Streamlit sets the theme's text colour on the page, so it
+# flips automatically between Light and Dark) and "muted" text is done with
+# opacity rather than a fixed grey. Lines/borders use rgba(128,128,128,x),
+# which reads on both. Only the brand red and the two icon colours are fixed.
 CUSTOM_CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -24,9 +29,9 @@ CUSTOM_CSS = """
 
     .block-container { padding-top: 2.5rem; max-width: 760px; }
 
-    h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; color: #111; }
+    h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; color: inherit; }
     h3 { font-size: 0.85rem; font-weight: 500; text-transform: uppercase;
-         letter-spacing: 0.08em; color: #888; margin-bottom: 0.5rem; }
+         letter-spacing: 0.08em; color: inherit; opacity: 0.6; margin-bottom: 0.5rem; }
 
     .lh-header {
         display: flex; align-items: center; gap: 14px;
@@ -36,15 +41,15 @@ CUSTOM_CSS = """
         background: #A13336; color: white; font-weight: 700;
         font-size: 0.75rem; padding: 6px 10px; letter-spacing: 0.05em;
     }
-    .lh-title { font-size: 1.25rem; font-weight: 600; color: #111; }
-    .lh-sub   { font-size: 0.8rem; color: #888; margin-top: 2px; }
+    .lh-title { font-size: 1.25rem; font-weight: 600; color: inherit; }
+    .lh-sub   { font-size: 0.8rem; color: inherit; opacity: 0.6; margin-top: 2px; }
 
     .status-box {
-        background: #f7f7f5; border-left: 3px solid #A13336;
+        background: rgba(128,128,128,0.12); border-left: 3px solid #A13336;
         padding: 0.75rem 1rem; border-radius: 0 4px 4px 0;
-        font-size: 0.85rem; color: #333; margin-bottom: 1rem;
+        font-size: 0.85rem; color: inherit; margin-bottom: 1rem;
     }
-    .skip-row { color: #aaa; font-style: italic; }
+    .skip-row { color: inherit; opacity: 0.5; font-style: italic; }
 
     div[data-testid="stDownloadButton"] button {
         background: #A13336; color: white; border: none;
@@ -74,7 +79,8 @@ CUSTOM_CSS = """
         font-weight: 500 !important;
         text-transform: uppercase !important;
         letter-spacing: 0.08em !important;
-        color: #7a7d85 !important;
+        color: inherit !important;
+        opacity: 0.65;
         margin: 0 0 0.75rem 0 !important;
     }
 
@@ -82,19 +88,17 @@ CUSTOM_CSS = """
        small and low-contrast - these are reference info, not decisions. */
     .lh-step-row {
         display: flex; align-items: center; gap: 10px;
-        padding: 10px 2px; border-top: 1px solid rgba(255,255,255,0.08);
-        font-size: 0.85rem !important;
+        padding: 10px 2px; border-top: 1px solid rgba(128,128,128,0.28);
+        font-size: 0.85rem !important; color: inherit !important;
     }
     .lh-step-icon { font-size: 0.95rem; width: 18px; text-align: center; flex-shrink: 0; }
+    .lh-step-row > span:not(.lh-step-icon) { opacity: 0.75; }
 
-    .lh-row-applied { color: #9a9da5 !important; }
-    .lh-row-applied .lh-step-icon { color: #7FB89A !important; }   /* soft sage green */
+    .lh-row-applied .lh-step-icon { color: #2F8F5F !important; }   /* green - readable on light AND dark */
+    .lh-row-skipped .lh-step-icon { color: #B9741B !important; }   /* amber - readable on light AND dark */
 
-    .lh-row-skipped { color: #9a9da5 !important; }
-    .lh-row-skipped .lh-step-icon { color: #D9A45E !important; }   /* muted warm amber */
-
-    .lh-row-locked { color: #5a5d65 !important; }
-    .lh-row-locked .lh-step-icon  { color: #5A5D65 !important; }    /* locked = dimmest */
+    /* locked = dimmest */
+    .lh-row-locked > span { opacity: 0.4 !important; }
 
     /* Active step header: number badge + title + "step N of M" counter,
        the single most prominent text block on the page. */
@@ -110,10 +114,10 @@ CUSTOM_CSS = """
     }
     .lh-step-title {
         font-size: 1.15rem !important; font-weight: 700 !important;
-        color: #f0f0f2 !important; letter-spacing: -0.01em;
+        color: inherit !important; letter-spacing: -0.01em;
     }
     .lh-step-counter {
-        font-size: 0.7rem !important; color: #7a7d85 !important;
+        font-size: 0.7rem !important; color: inherit !important; opacity: 0.6;
         margin-left: auto; white-space: nowrap;
     }
 
@@ -138,14 +142,14 @@ CUSTOM_CSS = """
         background: #6e1414 !important;
     }
     div[data-testid="stButton"] button[kind="primary"]:disabled {
-        background: #4a3030 !important; color: #9a9da5 !important;
+        background: rgba(161,51,54,0.35) !important; color: rgba(255,255,255,0.85) !important;
     }
     div[data-testid="stButton"] button[kind="secondary"] {
-        background: transparent !important; color: #9a9da5 !important;
-        border: 1px solid #3a3d45 !important;
+        background: transparent !important; color: inherit !important;
+        border: 1px solid rgba(128,128,128,0.5) !important;
     }
     div[data-testid="stButton"] button[kind="secondary"]:hover {
-        background: rgba(255,255,255,0.05) !important; color: #d0d2d8 !important;
+        background: rgba(128,128,128,0.15) !important; color: inherit !important;
     }
 
     /* View switcher (PDF Editor / Certificate Creator) -- plain text
@@ -165,29 +169,45 @@ CUSTOM_CSS = """
     div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button {
         background: transparent !important;
         border: none !important;
-        border-radius: 0 !important;
-        border-bottom: 2px solid transparent !important;
-        color: #7a7d85 !important;
+        border-radius: 6px 6px 0 0 !important;
+        border-bottom: 3px solid rgba(128,128,128,0.35) !important;
+        color: inherit !important;          /* follows Light/Dark theme */
+        opacity: 0.6;                       /* inactive = muted */
         font-weight: 500 !important;
         font-size: 14px !important;
         padding: 8px 4px !important;
         box-shadow: none !important;
-        border-bottom: 2px solid #3a3d45 !important;
     }
+    /* label text inside the button must follow the button, not its own colour */
+    div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button *,
+    div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button *,
+    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button *,
+    div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button * {
+        color: inherit !important;
+    }
+    /* ACTIVE tab: full-strength theme text, bold, thick brand underline and a
+       light brand tint so it's obvious on a white background as well as dark */
     div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button[kind="primary"],
     div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button[kind="primary"],
     div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button[kind="primary"],
     div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button[kind="primary"] {
-        color: #f0f0f2 !important;
-        font-weight: 600 !important;
-        border-bottom: 2px solid #A13336 !important;
+        opacity: 1;
+        font-weight: 700 !important;
+        border-bottom: 3px solid #A13336 !important;
+        background: rgba(161,51,54,0.10) !important;
     }
     div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button:hover,
     div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button:hover,
     div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button:hover,
     div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button:hover {
-        background: transparent !important;
-        color: #d0d2d8 !important;
+        opacity: 1;
+        background: rgba(128,128,128,0.12) !important;
+    }
+    div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button[kind="primary"]:hover,
+    div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button[kind="primary"]:hover,
+    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button[kind="primary"]:hover,
+    div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button[kind="primary"]:hover {
+        background: rgba(161,51,54,0.16) !important;
     }
 </style>
 """
