@@ -822,70 +822,76 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
 # ═════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_view == 'Quote Estimator':
 
-    render_eyebrow("Window dimensions")
-    col_w, col_h = st.columns(2)
-    with col_w:
-        window_width_mm = st.number_input(
-            "Width (mm)", min_value=1, value=1200, step=10, key="window_diagram_width"
-        )
-    with col_h:
-        window_height_mm = st.number_input(
-            "Height (mm)", min_value=1, value=1500, step=10, key="window_diagram_height"
-        )
-
-    # Split: the overall size above stays the same, divided into two equal
-    # panes side by side. The first set of options below then controls the
-    # LEFT pane, and a second set appears for the RIGHT pane.
-    window_split = st.checkbox(
-        "Split into two panes", value=False, key="window_diagram_split"
-    )
+    # Two halves: options on the left, the diagram on the right. The
+    # diagram's column stays in view while the options are scrolled (see
+    # the "window_diagram_panel" rule in styles.py).
+    col_options, col_diagram = st.columns(2, gap="medium")
 
     def window_pane_controls(key_suffix, default_handle_side):
         """Opening sash / tilt and turn / tilt only / handle side for one pane."""
         # Read before the widgets are drawn, so "Tilt and turn" and the
         # handle side can be greyed out while "Tilt only" is on.
         tilt_only_on = st.session_state.get(f"window_diagram_tilt_only{key_suffix}", False)
-        col_swing, col_handle = st.columns(2)
-        with col_swing:
-            swing = st.toggle(
-                "Opening sash", value=False, key=f"window_diagram_swing{key_suffix}"
-            )
-            # Adds the tilt lines on top of the standard side-hung ones.
-            tilt = st.toggle(
-                "Tilt and turn", value=False, key=f"window_diagram_tilt{key_suffix}",
-                disabled=not swing or tilt_only_on,
-            )
-            # Handle at the top middle, tilt lines only. Overrides the
-            # two options above it.
-            tilt_only = st.toggle(
-                "Tilt only", value=False, key=f"window_diagram_tilt_only{key_suffix}",
-                disabled=not swing,
-            )
-        with col_handle:
-            # Only matters for a side handle (not tilt only).
-            handle_side = st.radio(
-                "Handle side", ["Left", "Right"],
-                index=["Left", "Right"].index(default_handle_side), horizontal=True,
-                key=f"window_diagram_handle_side{key_suffix}",
-                disabled=not swing or tilt_only_on,
-            )
+        swing = st.toggle(
+            "Opening sash", value=False, key=f"window_diagram_swing{key_suffix}"
+        )
+        # Adds the tilt lines on top of the standard side-hung ones.
+        tilt = st.toggle(
+            "Tilt and turn", value=False, key=f"window_diagram_tilt{key_suffix}",
+            disabled=not swing or tilt_only_on,
+        )
+        # Handle at the top middle, tilt lines only. Overrides the two
+        # options above it.
+        tilt_only = st.toggle(
+            "Tilt only", value=False, key=f"window_diagram_tilt_only{key_suffix}",
+            disabled=not swing,
+        )
+        # Only matters for a side handle (not tilt only).
+        handle_side = st.radio(
+            "Handle side", ["Left", "Right"],
+            index=["Left", "Right"].index(default_handle_side), horizontal=True,
+            key=f"window_diagram_handle_side{key_suffix}",
+            disabled=not swing or tilt_only_on,
+        )
         return swing, tilt, tilt_only, handle_side.lower()
 
-    if window_split:
-        render_eyebrow("Left pane")
-    # Same widget keys whether split or not, so the single window's
-    # settings carry over as the left pane's when splitting.
-    window_swing, window_tilt, window_tilt_only, window_handle_side = \
-        window_pane_controls("", "Right")
+    with col_options:
+        render_eyebrow("Window dimensions")
+        col_w, col_h = st.columns(2)
+        with col_w:
+            window_width_mm = st.number_input(
+                "Width (mm)", min_value=1, value=1200, step=10, key="window_diagram_width"
+            )
+        with col_h:
+            window_height_mm = st.number_input(
+                "Height (mm)", min_value=1, value=1500, step=10, key="window_diagram_height"
+            )
 
-    if window_split:
-        render_eyebrow("Right pane")
-        # Handle defaults to the left, so a pair meets in the middle.
-        window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
-            window_pane_controls("_2", "Left")
-    else:
-        window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
-            False, False, False, "left"
+        # Split: the overall size above stays the same, divided into two
+        # equal panes side by side, each with its own options.
+        window_split = st.checkbox(
+            "Split into two panes", value=False, key="window_diagram_split"
+        )
+
+        # Same widget keys for the single window and the left pane, so a
+        # single window's settings carry over as the left pane's.
+        if window_split:
+            col_left_pane, col_right_pane = st.columns(2)
+            with col_left_pane:
+                render_eyebrow("Left pane")
+                window_swing, window_tilt, window_tilt_only, window_handle_side = \
+                    window_pane_controls("", "Right")
+            with col_right_pane:
+                render_eyebrow("Right pane")
+                # Handle defaults to the left, so a pair meets in the middle.
+                window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
+                    window_pane_controls("_2", "Left")
+        else:
+            render_eyebrow("Sash")
+            window_swing, window_tilt, window_tilt_only, window_handle_side = \
+                window_pane_controls("", "Right")
+            window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
+                False, False, False, "left"
 
     diagram_options = dict(
         swing=window_swing, handle_side=window_handle_side, tilt=window_tilt,
@@ -895,35 +901,38 @@ elif st.session_state.active_view == 'Quote Estimator':
         tilt_only_2=window_tilt_only_2,
     )
 
-    # No button, no gate -- this is cheap local vector drawing with no
-    # network/file I/O involved, so it just redraws on every keystroke.
-    diagram_png = draw_window_diagram(window_width_mm, window_height_mm, **diagram_options)
+    with col_diagram:
+        with st.container(key="window_diagram_panel"):
+            render_eyebrow("Diagram")
 
-    st.markdown("---")
-    render_eyebrow("Diagram")
+            # No button, no gate -- this is cheap local vector drawing with
+            # no network/file I/O involved, so it just redraws on every change.
+            diagram_png = draw_window_diagram(window_width_mm, window_height_mm, **diagram_options)
 
-    # Fit the diagram inside a max width AND a max height, so tall
-    # windows don't grow too tall on screen.
-    MAX_DIAGRAM_WIDTH  = 750
-    MAX_DIAGRAM_HEIGHT = 450
-    diagram_pix = fitz.Pixmap(diagram_png)
-    display_width = min(
-        MAX_DIAGRAM_WIDTH,
-        int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
-    )
-    st.image(diagram_png, width=display_width)
+            # Fit the diagram inside a max width (half the page) AND a max
+            # height, so tall windows don't grow too tall on screen.
+            MAX_DIAGRAM_WIDTH  = 360
+            MAX_DIAGRAM_HEIGHT = 450
+            diagram_pix = fitz.Pixmap(diagram_png)
+            display_width = min(
+                MAX_DIAGRAM_WIDTH,
+                int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
+            )
+            st.image(diagram_png, width=display_width)
 
-    # Full-quality version: the same drawing as vector PDF on a blank A4
-    # page, sharp at any zoom and ready to print.
-    diagram_pdf = draw_window_diagram_pdf(window_width_mm, window_height_mm, **diagram_options)
-    st.download_button(
-        "Download PDF",
-        data=diagram_pdf,
-        file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
-                   f"{'_split' if window_split else ''}.pdf"),
-        mime="application/pdf",
-        key="window_diagram_pdf_download",
-    )
+            # Full-quality version: the same drawing as vector PDF on a blank
+            # A4 page, sharp at any zoom and ready to print.
+            diagram_pdf = draw_window_diagram_pdf(
+                window_width_mm, window_height_mm, **diagram_options
+            )
+            st.download_button(
+                "Download PDF",
+                data=diagram_pdf,
+                file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
+                           f"{'_split' if window_split else ''}.pdf"),
+                mime="application/pdf",
+                key="window_diagram_pdf_download",
+            )
 
     # Price estimate for the same width x height entered above.
     st.markdown("---")

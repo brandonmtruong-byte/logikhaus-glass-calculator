@@ -45,7 +45,7 @@ CUSTOM_CSS = """
     .lh-sub   { font-size: 0.8rem; color: inherit; opacity: 0.6; margin-top: 2px; }
 
     .status-box {
-        background: rgba(128,128,128,0.24); border-left: 3px solid #A13336;
+        background: rgba(128,128,128,0.12); border-left: 3px solid #A13336;
         padding: 0.75rem 1rem; border-radius: 0 4px 4px 0;
         font-size: 0.85rem; color: inherit; margin-bottom: 1rem;
     }
@@ -170,7 +170,7 @@ CUSTOM_CSS = """
         background: transparent !important;
         border: none !important;
         border-radius: 6px 6px 0 0 !important;
-        border-bottom: 3px solid rgba(128,128,128,0.5) !important;
+        border-bottom: 3px solid rgba(128,128,128,0.35) !important;
         color: inherit !important;          /* follows Light/Dark theme */
         opacity: 0.6;                       /* inactive = muted */
         font-weight: 500 !important;
@@ -208,6 +208,18 @@ CUSTOM_CSS = """
     div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button[kind="primary"]:hover,
     div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button[kind="primary"]:hover {
         background: rgba(161,51,54,0.16) !important;
+    }
+
+    /* Quote Estimator: the diagram's column (right half) stays in view
+       while the options on the left are scrolled. align-self stops the
+       column stretching to the full row height, which sticky needs to
+       have room to move. Covers both of Streamlit's column test ids
+       (older versions use "column", newer "stColumn"). */
+    div[data-testid="stColumn"]:has(div[class*="st-key-window_diagram_panel"]),
+    div[data-testid="column"]:has(div[class*="st-key-window_diagram_panel"]) {
+        position: sticky;
+        top: 1rem;
+        align-self: flex-start;
     }
 </style>
 """
