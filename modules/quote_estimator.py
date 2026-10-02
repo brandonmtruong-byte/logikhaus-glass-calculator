@@ -1,5 +1,5 @@
 """
-quote_estimator.py -- paste a Logikhaus position block, get a price estimate.
+quote_estimator.py -- type/paste the key lines of a Logikhaus position, get a price estimate.
 
 Model reverse-engineered from four Logikhaus quotes (Alphington, Wickins,
 Duggan, Ayling). Coefficients are on the v22 price list basis (AUD, ex GST)
@@ -266,31 +266,77 @@ def _apply_to_diagram(w, h, swing, tilt):
     st.session_state["window_diagram_tilt"] = bool(swing and tilt)
 
 
-PLACEHOLDER = """Paste a position block here, e.g.
+def _strip_label(txt, *labels):
+    """Allow people to paste 'System: Aluclad ...' as well as just the value."""
+    txt = (txt or "").strip()
+    return re.sub(rf"^\s*(?:{'|'.join(labels)})\s*[:=]\s*", "", txt, flags=re.I)
 
-Pos.no 12: D02
-size (W x H): 2000 x 2115
-quantity price value
-1 x 7728.31 = 7728.31
-1. /EMERGENCY LOCK: - Emergency function for a lock core
-1 x 10.50 = 10.50
-...
-System: Aluclad Timber 68x80 PEFC Jointed Pine
-Glass: 4/4 (26) CN61/32"""
+
+def _compose_block(name, size, qty, system, glass, fitting, notes, options, quoted):
+    """Rebuild a quote-style block from the separate boxes so one parser serves all."""
+    m = re.search(r"(\d{3,5})\D+?(\d{3,5})", size or "")
+    if not m:
+        return None
+    w, h = m.group(1), m.group(2)
+    try:
+        q = float((quoted or "").replace("$", "").replace(",", "").strip() or 0)
+    except ValueError:
+        q = 0.0
+    lines = [
+        f"Pos.no 1: {name.strip() or 'W'}",
+        f"size (W x H): {w} x {h}",
+        "quantity price value",
+        f"{int(qty)} x {q:.2f} = {q * int(qty):.2f}",
+        (options or "").strip(),
+        f"System: {_strip_label(system, 'System')}",
+        f"Glass: {_strip_label(glass, 'Glass')}",
+    ]
+    fit = _strip_label(fitting, "Fitting")
+    if fit and not re.search(r"\bfixed\b", fit, re.I):
+        lines += ["Sash: 68x80mm", f"Fitting: {fit}"]   # a fitting means it opens
+    lines.append(notes or "")
+    return "\n".join(lines)
 
 
 def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
-    """Paste-and-parse estimator. width/height args are unused (kept so the
-    app.py call doesn't change); the size comes from the pasted text."""
-    (eyebrow or st.subheader)("Price estimate - paste a quote line")
-    text = st.text_area("Position block", key="qe_paste", height=230,
-                        placeholder=PLACEHOLDER, label_visibility="collapsed")
-    if not text.strip():
-        st.caption("Copy a whole position (Pos.no ... down to the Handle / notes lines) "
-                   "from the quote PDF and paste it above.")
-        return
+    """Estimator driven by a few separate text boxes. width/height args are
+    unused (kept so the app.py call doesn't change)."""
+    (eyebrow or st.subheader)("Price estimate")
+    st.caption("Fill in the lines from the quote. Only size is required; the more you "
+               "give it, the better the estimate. Pasting 'System: ...' with its label is fine.")
 
-    p = parse_position(text)
+    c1, c2, c3 = st.columns([1, 1.2, 0.6])
+    name = c1.text_input("Position name", key="qe_name", placeholder="W01 or D02",
+                         help="Starts with D = door, otherwise window. Leave blank for a window.")
+    size = c2.text_input("Size (W x H, mm)", key="qe_size", placeholder="1100 x 2048")
+    qty = c3.number_input("Qty", min_value=1, value=1, step=1, key="qe_qty")
+
+    c4, c5 = st.columns(2)
+    system = c4.text_input("System", key="qe_system",
+                           placeholder="Aluclad Timber 68 PEFC Select Pine")
+    glass = c5.text_input("Glass", key="qe_glass", placeholder="LHG001_4/4 (26)")
+
+    c6, c7 = st.columns(2)
+    fitting = c6.text_input("Fitting / drawing code", key="qe_fitting",
+                            placeholder="blank = fixed. e.g. UR1STD, AX_RU1, TILTconc, R DX",
+                            help="Any fitting means the window opens. AX_ / conc = concealed hinges.")
+    notes = c7.text_input("Notes", key="qe_notes",
+                          placeholder="e.g. Outward opening entrance door; 3 units joined onsite")
+
+    c8, c9 = st.columns([2.2, 1])
+    options = c8.text_area("Priced options (optional)", key="qe_options", height=110,
+                           placeholder="1. WINKHAUS AV4D: - auto espag\n1 x 189.58 = 189.58\n"
+                                       "2. KEYED ALIKE: ...\n1 x 43.75 = 43.75",
+                           help="Paste the numbered option lines as they appear on the quote. "
+                                "They're added as quoted and also reveal the price list.")
+    quoted = c9.text_input("Quoted base price (optional)", key="qe_quoted", placeholder="7728.31",
+                           help="Only used to show how close the estimate is.")
+
+    block = _compose_block(name, size, qty, system, glass, fitting, notes, options, quoted)
+    if block is None:
+        st.info("Enter a size such as 1100 x 2048 to get an estimate.")
+        return
+    p = parse_position(block)
     if not p["ok"]:
         st.error(p["error"])
         return
@@ -298,7 +344,7 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
     with st.expander("Advanced: price list index / discount"):
         detected = p["index"]
         st.caption(
-            f"Detected price list index: {detected if detected else 'none (no priced options found)'}. "
+            f"Detected price list index: {detected if detected else 'none (add priced options to detect it)'}. "
             "1.00 = v22, 0.986 = v23.1 (Duggan), 0.90 = Ayling-style.")
         idx = st.number_input("Price list index", min_value=0.5, max_value=1.5,
                               value=float(detected or 1.0), step=0.001, format="%.4f")
@@ -310,28 +356,27 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
 
     kind = "Door" if p["is_door"] else ("Window - opening" if p["opener"] else "Window - fixed")
     st.markdown(
-        f"**{p['name']}** &nbsp;|&nbsp; {p['w']} x {p['h']} mm ({r['area']:.2f} m2) "
+        f"**Reading this as:** {p['w']} x {p['h']} mm ({r['area']:.2f} m2) "
         f"&nbsp;|&nbsp; {kind}" + (f" &nbsp;|&nbsp; x{p['qty']}" if p["qty"] > 1 else ""),
         unsafe_allow_html=True)
 
     if "note" in r:
         st.warning(r["note"])
         if r["options_total"]:
-            st.caption(f"Priced options/extras listed in the paste total {_money(r['options_total'])}.")
+            st.caption(f"Priced options/extras entered total {_money(r['options_total'])}.")
         return
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Base estimate (list)", _money(r["base_total"]),
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Base estimate (list)", _money(r["base_total"]),
               help=f"Likely range {_money(r['low'])} - {_money(r['high'])}")
-    c2.metric("Options & extras (as quoted)", _money(r["options_total"]))
-    c3.metric("Estimated line total", _money(r["line_total"]),
-              help=f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}. "
-                   f"Includes {disc:.0f}% discount on the base only." if disc else
+    m2.metric("Options & extras (as quoted)", _money(r["options_total"]))
+    m3.metric("Estimated line total", _money(r["line_total"]),
+              help=(f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}. "
+                    f"Includes {disc:.0f}% discount on the base only.") if disc else
                    f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}.")
-    st.caption(f"Base likely range {_money(r['low'])} - {_money(r['high'])} (list, before discount). "
-               f"Ex GST.")
+    st.caption(f"Base likely range {_money(r['low'])} - {_money(r['high'])} (list, before discount). Ex GST.")
     if "quoted_base" in r:
-        st.info(f"The pasted quote lists the base at {_money(r['quoted_base'])}; "
+        st.info(f"The quote lists the base at {_money(r['quoted_base'])}; "
                 f"this model gives {_money(r['base_total'])} ({r['vs_quoted_pct']:+.1f}%).")
     if not r["in_range"]:
         lo, hi = r["fit_range"]
@@ -353,6 +398,6 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
         st.table({"Base component": [l for l, _ in r["lines"]],
                   "Each ($, list)": [f"{a:,.2f}" for _, a in r["lines"]]})
         if p["options"]:
-            st.table({"Option (from paste)": [o["name"] for o in p["options"]],
+            st.table({"Option (as entered)": [o["name"] for o in p["options"]],
                       "Value ($)": [f"{o['value']:,.2f}" for o in p["options"]]})
         st.caption("Estimate only - not a Logikhaus quote. Rectangular windows and hinged doors only.")
