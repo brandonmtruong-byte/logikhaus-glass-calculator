@@ -45,7 +45,7 @@ CUSTOM_CSS = """
     .lh-sub   { font-size: 0.8rem; color: inherit; opacity: 0.6; margin-top: 2px; }
 
     .status-box {
-        background: rgba(128,128,128,0.18); border-left: 3px solid #A13336;
+        background: rgba(128,128,128,0.24); border-left: 3px solid #A13336;
         padding: 0.75rem 1rem; border-radius: 0 4px 4px 0;
         font-size: 0.85rem; color: inherit; margin-bottom: 1rem;
     }
