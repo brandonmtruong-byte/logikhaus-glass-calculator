@@ -24,7 +24,7 @@ from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDF Fixr",
+    page_title="Logikhaus PDF Fixr Tool",
     page_icon="🪟",
     layout="centered"
 )
