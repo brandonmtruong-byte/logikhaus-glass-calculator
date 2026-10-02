@@ -1,160 +1,254 @@
 """
-quote_estimator.py -- rough window price estimator for the Quote Estimator tab.
+quote_estimator.py -- paste a Logikhaus position block, get a price estimate.
 
 Model reverse-engineered from four Logikhaus quotes (Alphington, Wickins,
-Duggan, Ayling). All coefficients are on the v22 price list basis (AUD, ex GST)
-and are scaled by the price-list index chosen in the UI.
+Duggan, Ayling). Coefficients are on the v22 price list basis (AUD, ex GST)
+and are scaled by a price-list index that is auto-detected from the priced
+option lines in the pasted text (e.g. EMERGENCY LOCK 11.67 -> 1.00,
+11.51 -> 0.986, 10.50 -> 0.90).
 
-Fitted on rectangular aluclad 68 windows only. The 88 / triple glazing and
-6/6 glass adjustments are rougher (very few data points) -- see CAUTION flags.
-Doors, lift & slide, arches, angled/curved units are NOT modelled.
+What it prices
+    * Rectangular aluclad windows (fixed, tilt & turn, concealed hinges)
+    * Hinged doors (inswing, outswing DX, French pairs)
+What it does NOT price (it says so rather than guessing)
+    * Lift & slide, solid IV68/IV92 doors, LUMIS, ALU STAR
+    * Arch / angled / curved shapes (the listed ANGLE/ARCH EXTRA lines are
+      added as quoted, but the base is only a bounding-rectangle estimate)
 
-Public API:
-    estimate_window(...)        -> dict   (pure function, no Streamlit)
-    render_quote_estimator(w,h) -> None   (draws the estimator UI)
+Public API
+    parse_position(text)                  -> dict   (pure)
+    estimate_position(parsed, ...)        -> dict   (pure)
+    render_quote_estimator(w, h, eyebrow) -> None   (Streamlit UI)
 """
+
+import re
+import statistics
 
 import streamlit as st
 
 # ---------------------------------------------------------------------------
-# Fitted coefficients  (v22 basis)
-# price = c + a * area_m2 + p * perimeter_m
+# Fitted coefficients (v22 basis):  price = c + a * area_m2 + p * perimeter_m
 # ---------------------------------------------------------------------------
-BASE_FIXED = {"c": 343.5, "a": 232.3, "p": 147.9}      # mean err 2.7%, max 6%
-BASE_OPENER = {"c": 131.1, "a": 626.7, "p": 164.5}     # mean err 5.4%, max 19%
-CONCEALED_HINGE_PREMIUM = 185.2
+WINDOW_FIXED = {"c": 343.5, "a": 232.3, "p": 147.9}    # mean err 2.7%, max 6%
+WINDOW_OPENER = {"c": 131.1, "a": 626.7, "p": 164.5}   # mean err 5.4%, max 19%
+CONCEALED_PREMIUM = 185.2
+GLASS_6_6_PER_M2 = 90.0           # rough
+SYSTEM_88_MULT = 1.20             # rough (very few points)
 
-# Uncertainty band shown around the estimate
-BAND_FIXED = 0.06
-BAND_OPENER = 0.10
+DOOR_HINGED = {"c": 83.9, "a": 1761.3}                 # 7 points, within ~7%
+DOOR_OUTWARD_MULT = 1.25                               # 2 single doors, 1.29-1.34
+DOOR_FRENCH_MULT = 1.15                                # ONE French pair (outward) at 1.14
 
-# Area range the model was fitted on (m2) -- warn outside it
-FIT_AREA_MIN, FIT_AREA_MAX = 0.6, 7.0
+BAND = {"win_fixed": 0.06, "win_opener": 0.10, "door_in": 0.08, "door_out": 0.12}
+FIT_AREA = {"window": (0.6, 7.0), "door": (1.9, 4.3)}
 
-# ---------------------------------------------------------------------------
-# Curated dropdown options
-# ---------------------------------------------------------------------------
-# label -> (multiplier, forces triple glass?)
-SYSTEMS = {
-    "Aluclad Timber 68 - Select": (1.00, False),
-    "Aluclad Timber 68 - Jointed": (1.00, False),
-    "Aluclad Timber 68 SLIM - Jointed": (1.00, False),
-    "Aluclad Timber 88 - triple glazed (rough)": (1.20, True),
+# Observed lift & slide prices, v22 basis (not modelled)
+LS_NOTE = ("Lift & slide isn't modelled. In your quotes, 3.0-3.5 m wide LS units "
+           "came to roughly $13,000-$14,200 each (list, before options).")
+
+# v22 reference rates for auto-detecting the price list index.
+# Longest keys are matched first so "STEEL HINGES 4TH" beats "STEEL HINGES".
+REF_RATES = {
+    "EMERGENCY LOCK": 11.67, "KEYED ALIKE": 43.75, "WINKHAUS AV4D": 189.58,
+    "STEEL HINGES 4TH": 116.67, "STEEL HINGES": 350.00, "AUSTIN WINDOW F9": 29.17,
+    "FLYSCREEN ALU": 131.94, "ADJUSTABLE WHEELS": 72.92, "KIT FORM": 729.17,
+    "TOULON KEY F9": 131.25, "STAY ARM": 33.68, "TURN BLOCKED": 23.33,
+    "TF POWERHINGE": 94.79, "HANDLE BRAKE PH": 77.29, "WELDED": 24.31,
+    "TALL DOORS": 416.67, "AMSTERDAM": 67.08,
 }
+_REF_KEYS = sorted(REF_RATES, key=len, reverse=True)
 
-# label -> extra $ per m2 of window area (v22 basis)
-GLASS = {
-    "Double 4/4 (26)": 0.0,
-    "Double 4/4 combi-neutral CN61/32": 0.0,
-    "Double 6/6 (32)": 90.0,
-}
+_NUM = r"\d[\d,]*(?:\.\d+)?"
 
-# label -> (price-list index, discount already applied?, default discount %)
-PRICE_LISTS = {
-    "v22 list (Alphington / Wickins) - 10% discount": (1.0000, 10.0),
-    "v23.1 list (Duggan) - 10% discount": (0.9863, 10.0),
-    "v23.1 list (Ayling) - discount already included": (0.9000, 0.0),
-}
 
-TYPES = {
-    "Fixed (no opening sash)": ("fixed", False),
-    "Tilt & turn - standard hinges": ("opener", False),
-    "Tilt & turn - concealed hinges (Siegenia)": ("opener", True),
-}
-
-# label -> price each (v22 basis)
-HANDLES = {
-    "No handle": 0.0,
-    "Hoppe Austin F9": 29.17,
-    "Hoppe Amsterdam matt black": 67.08,
-    "Hoppe Toulon keyed F9 (child safe)": 131.25,
-}
-
-OPENER_EXTRAS = {
-    "Handle brake (Powerhinge)": 77.29,
-    "Friction brake (concealed)": 87.50,
-    "Stay arm / turn limiter": 33.68,
-    "Tilt-first Powerhinge": 94.79,
-    "Tilt first, turn blocked": 23.33,
-}
-
-FLYSCREEN_PER_M2 = 131.94
-HST_PER_M2 = 35.00
-ALU_SILL_PER_M = 41.04   # Duggan's $40.48 on v22 basis
+def _f(s):
+    return float(s.replace(",", ""))
 
 
 # ---------------------------------------------------------------------------
-# Pure pricing function
+# Parser
 # ---------------------------------------------------------------------------
-def estimate_window(
-    width_mm, height_mm, *, qty=1,
-    system, glass, win_type, price_list,
-    handle="No handle", extras=(), flyscreen=False, sash_width_mm=None,
-    hst_glass=False, alu_sill=False,
-):
-    """Return {'lines': [(label, amount)], 'unit', 'total', 'low', 'high', ...}.
+def _parse_options(text):
+    """Priced option lines like '3. WINKHAUS AV4D: - auto espag  1 x 170.63 = 170.63'."""
+    head = re.search(r"quantity\s+price\s+value", text, re.I)
+    start = head.end() if head else 0
+    m_sys = re.search(r"\bSystem\s*:", text[start:], re.I)
+    end = start + m_sys.start() if m_sys else len(text)
+    region = text[start:end]
 
-    All amounts are AFTER applying the price-list index but BEFORE discount,
-    except 'net_total' which is after the price list's discount.
-    """
-    index, discount_pct = PRICE_LISTS[price_list]
-    kind, concealed = TYPES[win_type]
-    sys_mult, triple = SYSTEMS[system]
+    heads = list(re.finditer(r"(?:(?<=\s)|^)(\d{1,2})\.\s+([A-Z/\-][^:\n]{1,60}?):", region))
+    options = []
+    for i, h in enumerate(heads):
+        chunk = region[h.end(): heads[i + 1].start() if i + 1 < len(heads) else len(region)]
+        name = h.group(2).strip().lstrip("/-").strip()
+        eq = list(re.finditer(rf"({_NUM})\s*=\s*({_NUM})", chunk))
+        if eq:
+            rate, value = _f(eq[-1].group(1)), _f(eq[-1].group(2))
+        else:
+            nums = re.findall(r"\d[\d,]*\.\d{2}\b", chunk)
+            if not nums:
+                continue
+            rate, value = None, _f(nums[-1])
+        options.append({"name": name, "rate": rate, "value": value})
+    return options
 
-    area = width_mm * height_mm / 1e6
-    perim = 2 * (width_mm + height_mm) / 1000
 
-    coef = BASE_FIXED if kind == "fixed" else BASE_OPENER
-    base = coef["c"] + coef["a"] * area + coef["p"] * perim
+def _detect_index(options):
+    ratios = []
+    for o in options:
+        if o["rate"] is None:
+            continue
+        up = o["name"].upper()
+        for k in _REF_KEYS:
+            if up.startswith(k):
+                ratios.append(o["rate"] / REF_RATES[k])
+                break
+    ratios = [r for r in ratios if 0.7 < r < 1.3]
+    if not ratios:
+        return None
+    return round(statistics.median(ratios), 4)
 
-    lines = [("Frame, sash & glass (base)", base)]
 
-    if concealed:
-        lines.append(("Concealed hinges", CONCEALED_HINGE_PREMIUM))
-    if not triple and GLASS[glass]:
-        lines.append((f"Glass upgrade: {glass}", GLASS[glass] * area))
-    if sys_mult != 1.0:
-        sub = sum(a for _, a in lines)
-        lines.append((f"System uplift x{sys_mult:.2f}", sub * (sys_mult - 1)))
+def parse_position(text):
+    """Pull the fields that matter out of one pasted position block."""
+    t = text.replace("\u00d7", "x")
+    out = {"ok": False, "warnings": []}
 
-    # ---- add-ons: fixed price-list items --------------------------------
-    if kind == "opener":
-        if HANDLES[handle]:
-            lines.append((handle, HANDLES[handle]))
-        for e in extras:
-            lines.append((e, OPENER_EXTRAS[e]))
-        if flyscreen:
-            sw = sash_width_mm or width_mm
-            fa = sw * height_mm / 1e6
-            lines.append((f"Flyscreen ({fa:.2f} m2)", fa * FLYSCREEN_PER_M2))
-    if hst_glass:
-        ga = max(width_mm - 218, 0) * max(height_mm - 218, 0) / 1e6
-        lines.append((f"HST glass ({ga:.2f} m2)", ga * HST_PER_M2))
-    if alu_sill:
-        lines.append((f"Alu sill 90 ({width_mm/1000:.2f} m)", width_mm / 1000 * ALU_SILL_PER_M))
+    m = re.search(r"Pos\.?\s*no\.?\s*\d+\s*:\s*([^\n]+)", t, re.I)
+    out["name"] = m.group(1).strip() if m else "?"
 
-    # ---- scale to chosen price list; add-ons are already v22 so scale all
-    lines = [(lbl, amt * index) for lbl, amt in lines]
-    unit = sum(a for _, a in lines)
-    total = unit * qty
+    m = re.search(r"size\s*\(\s*W\s*x\s*H\s*\)\s*:\s*(\d+)\s*x\s*(\d+)", t, re.I)
+    if not m:
+        m = re.search(r"\b(\d{3,4})\s*x\s*(\d{3,4})\b", t)
+    if not m:
+        out["error"] = "Couldn't find the size - include the 'size (W x H): ...' line."
+        return out
+    out["w"], out["h"] = int(m.group(1)), int(m.group(2))
 
-    # Uncertainty applies to the fitted base only, not fixed-price add-ons
-    band = BAND_FIXED if kind == "fixed" else BAND_OPENER
-    base_scaled = lines[0][1] * qty
-    low = total - base_scaled * band
-    high = total + base_scaled * band
+    # Quoted base price line (first 'qty x price = value' after the header)
+    hdr = re.search(r"quantity\s+price\s+value", t, re.I)
+    seg = t[hdr.end():] if hdr else t
+    m = re.search(rf"(\d+)\s*x\s*({_NUM})\s*=\s*({_NUM})", seg)
+    out["qty"], out["quoted_unit"] = 1, None
+    if m and hdr:
+        out["qty"] = int(m.group(1))
+        out["quoted_unit"] = _f(m.group(2))
 
-    net_total = total * (1 - discount_pct / 100)
-    return {
-        "lines": lines, "unit": unit, "total": total,
-        "low": low, "high": high,
-        "discount_pct": discount_pct, "net_total": net_total,
-        "net_low": low * (1 - discount_pct / 100),
-        "net_high": high * (1 - discount_pct / 100),
-        "area": area, "perimeter": perim, "kind": kind,
-        "in_fit_range": FIT_AREA_MIN <= area <= FIT_AREA_MAX,
-        "triple": triple,
-    }
+    out["options"] = _parse_options(t)
+    out["index"] = _detect_index(out["options"])
+
+    sysm = re.search(r"System\s*:\s*([^\n]+)", t, re.I)
+    out["system"] = sysm.group(1).strip() if sysm else ""
+    glm = re.search(r"Glass\s*:\s*([^\n]+)", t, re.I)
+    out["glass"] = glm.group(1).strip() if glm else ""
+
+    up = t.upper()
+    name_up = out["name"].upper()
+    is_door = bool(re.match(r"\s*D", name_up)) or "ENTRANCE DOOR" in up
+    out["is_door"] = is_door
+
+    out["is_ls"] = bool(re.search(r"\bLS\b|LIFT\s*(AND|&)?\s*SLIDE|WHEELS\s*:|LOCKBOLTS", up))
+    out["unsupported"] = None
+    if re.search(r"\bIV\s?\d{2}\b", out["system"].upper()):
+        out["unsupported"] = "Solid IV68/IV92 doors aren't modelled (one data point each)."
+    elif "LUMIS" in out["system"].upper() or "ALU STAR" in out["system"].upper():
+        out["unsupported"] = "LUMIS / ALU STAR systems aren't modelled."
+    elif out["is_ls"] and is_door:
+        out["unsupported"] = LS_NOTE
+
+    out["triple"] = bool(re.search(r"\d/\d/\d", out["glass"])) or bool(re.search(r"\b88\b", out["system"]))
+    out["glass_6"] = bool(re.search(r"\b6/6\b|\b8/8\b", out["glass"])) and not out["triple"]
+    out["outward"] = bool(re.search(r"R\s*DX|OUTWARD|OUTSWING", up))
+    out["french"] = bool(re.search(r"FRENCH|\bR2\b", up)) and is_door
+
+    tilt_turn = bool(re.search(r"\bUR[12]|AX_RU|T&T|MIK\+", up))
+    tilt_only = bool(re.search(r"AX_U\b|TILTCONC|TILT-ONLY", up))
+    out["tilt_turn"], out["tilt_only"] = tilt_turn, tilt_only
+    out["opener"] = (not is_door) and (tilt_turn or tilt_only or bool(re.search(r"\bSash\s*:", t)))
+    out["concealed"] = bool(re.search(r"AX_|CONC", up))
+
+    if re.search(r"ANGLE EXTRA|ARCH EXTRA|CURVE", up):
+        out["warnings"].append(
+            "Angled / arched / curved: the base is only a bounding-rectangle estimate. "
+            "The ANGLE/ARCH EXTRA line from the paste is added as quoted.")
+    if out["triple"] and not is_door:
+        out["warnings"].append("88 / triple glazing uplift rests on 3 data points - treat as +/-20%.")
+    if out["french"]:
+        out["warnings"].append("French pair uplift is based on a single quote - low confidence.")
+    if re.search(r"JOINED ONSITE", up):
+        out["warnings"].append("Multi-unit assembly - the model treats it as one window, so expect more error.")
+    if re.search(r"\+\s*\d+\s*%", out["glass"]):
+        out["warnings"].append("Glass surcharge (e.g. +30%) isn't modelled.")
+    if re.search(r"\bORN\b|ORNAMENTAL|FLUTED", up):
+        out["warnings"].append("Ornamental glass on small windows ran well above the model - treat as low.")
+    out["ok"] = True
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Pricing
+# ---------------------------------------------------------------------------
+def estimate_position(p, index=None, discount_pct=None):
+    """Return an estimate dict for a parsed position (see parse_position)."""
+    w, h = p["w"], p["h"]
+    area = w * h / 1e6
+    perim = 2 * (w + h) / 1000
+    idx = index if index else (p["index"] or 1.0)
+    if discount_pct is None:
+        discount_pct = 10.0 if idx > 0.95 else 0.0
+
+    opt_total = sum(o["value"] for o in p["options"])
+    r = {"area": area, "index": idx, "discount_pct": discount_pct,
+         "options_total": opt_total, "base_unit": None, "lines": []}
+    if p["unsupported"]:
+        r["note"] = p["unsupported"]
+        return r
+
+    kind = "door" if p["is_door"] else "window"
+    lo, hi = FIT_AREA[kind]
+    r["in_range"] = lo <= area <= hi
+    r["fit_range"] = (lo, hi)
+
+    if p["is_door"]:
+        base = DOOR_HINGED["c"] + DOOR_HINGED["a"] * area
+        r["lines"].append(("Hinged door base (size)", base))
+        if p["outward"]:
+            m = DOOR_FRENCH_MULT if p["french"] else DOOR_OUTWARD_MULT
+            lbl = "Outward French pair" if p["french"] else "Outward / DX"
+            r["lines"].append((f"{lbl} uplift x{m}", base * (m - 1)))
+        band = BAND["door_out"] if p["outward"] else BAND["door_in"]
+    else:
+        coef = WINDOW_OPENER if p["opener"] else WINDOW_FIXED
+        base = coef["c"] + coef["a"] * area + coef["p"] * perim
+        r["lines"].append(("Window base (size" + (", opening sash)" if p["opener"] else ", fixed)"), base))
+        if p["opener"] and p["concealed"]:
+            r["lines"].append(("Concealed hinges", CONCEALED_PREMIUM))
+        if p["glass_6"]:
+            r["lines"].append(("6/6 glass upgrade", GLASS_6_6_PER_M2 * area))
+        if p["triple"]:
+            sub = sum(a for _, a in r["lines"])
+            r["lines"].append((f"88 / triple uplift x{SYSTEM_88_MULT}", sub * (SYSTEM_88_MULT - 1)))
+        band = BAND["win_opener"] if p["opener"] else BAND["win_fixed"]
+
+    if p["triple"] and not p["is_door"]:
+        band = max(band, 0.20)
+    unit = sum(a for _, a in r["lines"]) * idx
+    r["lines"] = [(l, a * idx) for l, a in r["lines"]]
+    r["base_unit"] = unit
+    r["base_total"] = unit * p["qty"]
+    r["low"] = r["base_total"] * (1 - band)
+    r["high"] = r["base_total"] * (1 + band)
+    # Options / extras are NOT discounted on these quotes; the base is.
+    d = 1 - discount_pct / 100
+    r["net_base"] = r["base_total"] * d
+    r["net_low"], r["net_high"] = r["low"] * d, r["high"] * d
+    r["line_total"] = r["net_base"] + opt_total
+    r["line_low"], r["line_high"] = r["net_low"] + opt_total, r["net_high"] + opt_total
+    if p["quoted_unit"]:
+        q = p["quoted_unit"] * p["qty"]
+        r["quoted_base"] = q
+        r["vs_quoted_pct"] = (r["base_total"] - q) / q * 100
+    return r
 
 
 # ---------------------------------------------------------------------------
@@ -164,89 +258,101 @@ def _money(x):
     return f"${x:,.0f}"
 
 
-def render_quote_estimator(width_mm, height_mm, eyebrow=None):
-    """Draw the estimator. Width/height come from the dimension inputs above
-    it, so the diagram and the estimate always describe the same window."""
-    def head(text):
-        if eyebrow:
-            eyebrow(text)
-        else:
-            st.subheader(text)
+def _apply_to_diagram(w, h, swing, tilt):
+    """Button callback: push the pasted size/opening into the diagram widgets."""
+    st.session_state["window_diagram_width"] = int(w)
+    st.session_state["window_diagram_height"] = int(h)
+    st.session_state["window_diagram_swing"] = bool(swing)
+    st.session_state["window_diagram_tilt"] = bool(swing and tilt)
 
-    head("Price estimate")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        system = st.selectbox("System", list(SYSTEMS), key="qe_system")
-        win_type = st.selectbox("Window type", list(TYPES), key="qe_type")
-    with c2:
-        _, triple = SYSTEMS[system]
-        glass = st.selectbox(
-            "Glass", list(GLASS), key="qe_glass", disabled=triple,
-            help="88 system is priced as triple glazed." if triple else None,
-        )
-        price_list = st.selectbox("Price list", list(PRICE_LISTS), key="qe_pricelist")
+PLACEHOLDER = """Paste a position block here, e.g.
 
-    kind, _ = TYPES[win_type]
+Pos.no 12: D02
+size (W x H): 2000 x 2115
+quantity price value
+1 x 7728.31 = 7728.31
+1. /EMERGENCY LOCK: - Emergency function for a lock core
+1 x 10.50 = 10.50
+...
+System: Aluclad Timber 68x80 PEFC Jointed Pine
+Glass: 4/4 (26) CN61/32"""
 
-    handle, extras, flyscreen, sash_w = "No handle", [], False, None
-    if kind == "opener":
-        o1, o2 = st.columns(2)
-        with o1:
-            handle = st.selectbox("Handle", list(HANDLES), index=1, key="qe_handle")
-            flyscreen = st.checkbox("Aluminium flyscreen", key="qe_fly")
-        with o2:
-            extras = st.multiselect("Opener extras", list(OPENER_EXTRAS), key="qe_extras")
-            if flyscreen:
-                sash_w = st.number_input(
-                    "Opening sash width (mm) - for flyscreen size",
-                    min_value=100, max_value=int(max(width_mm, 100)),
-                    value=int(width_mm), step=10, key="qe_sash_w",
-                )
 
-    a1, a2, a3 = st.columns(3)
-    with a1:
-        hst = st.checkbox("HST glass", key="qe_hst")
-    with a2:
-        sill = st.checkbox("Aluminium sill 90", key="qe_sill")
-    with a3:
-        qty = st.number_input("Quantity", min_value=1, value=1, step=1, key="qe_qty")
+def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
+    """Paste-and-parse estimator. width/height args are unused (kept so the
+    app.py call doesn't change); the size comes from the pasted text."""
+    (eyebrow or st.subheader)("Price estimate - paste a quote line")
+    text = st.text_area("Position block", key="qe_paste", height=230,
+                        placeholder=PLACEHOLDER, label_visibility="collapsed")
+    if not text.strip():
+        st.caption("Copy a whole position (Pos.no ... down to the Handle / notes lines) "
+                   "from the quote PDF and paste it above.")
+        return
 
-    r = estimate_window(
-        width_mm, height_mm, qty=qty, system=system, glass=glass,
-        win_type=win_type, price_list=price_list, handle=handle,
-        extras=extras, flyscreen=flyscreen, sash_width_mm=sash_w,
-        hst_glass=hst, alu_sill=sill,
-    )
+    p = parse_position(text)
+    if not p["ok"]:
+        st.error(p["error"])
+        return
 
-    st.markdown("---")
-    m1, m2 = st.columns(2)
-    m1.metric("Estimate (before discount)", _money(r["total"]),
-              help=f"Range {_money(r['low'])} - {_money(r['high'])}")
-    if r["discount_pct"]:
-        m2.metric(f"After {r['discount_pct']:.0f}% discount", _money(r["net_total"]),
-                  help=f"Range {_money(r['net_low'])} - {_money(r['net_high'])}")
-    else:
-        m2.metric("Net (discount included)", _money(r["net_total"]))
-    st.caption(
-        f"Likely range {_money(r['low'])} - {_money(r['high'])} before discount "
-        f"({width_mm} x {height_mm} mm = {r['area']:.2f} m2). ex GST."
-    )
-
-    if not r["in_fit_range"]:
-        st.warning(
-            f"{r['area']:.2f} m2 is outside the {FIT_AREA_MIN}-{FIT_AREA_MAX} m2 range "
-            "this model was fitted on, so treat it as a guess."
-        )
-    if r["triple"]:
-        st.warning("88 / triple glazing uplift is based on very few data points (+/- 15% or more).")
-
-    with st.expander("Breakdown"):
-        st.table({
-            "Item": [l for l, _ in r["lines"]],
-            "Each ($)": [f"{a:,.2f}" for _, a in r["lines"]],
-        })
+    with st.expander("Advanced: price list index / discount"):
+        detected = p["index"]
         st.caption(
-            "Estimate only - not a Logikhaus quote. Rectangular windows only; "
-            "doors, lift & slide, arches and angled/curved units are not modelled."
-        )
+            f"Detected price list index: {detected if detected else 'none (no priced options found)'}. "
+            "1.00 = v22, 0.986 = v23.1 (Duggan), 0.90 = Ayling-style.")
+        idx = st.number_input("Price list index", min_value=0.5, max_value=1.5,
+                              value=float(detected or 1.0), step=0.001, format="%.4f")
+        disc = st.number_input("Discount on base (%) - options aren't discounted",
+                               min_value=0.0, max_value=50.0,
+                               value=10.0 if idx > 0.95 else 0.0, step=1.0)
+
+    r = estimate_position(p, index=idx, discount_pct=disc)
+
+    kind = "Door" if p["is_door"] else ("Window - opening" if p["opener"] else "Window - fixed")
+    st.markdown(
+        f"**{p['name']}** &nbsp;|&nbsp; {p['w']} x {p['h']} mm ({r['area']:.2f} m2) "
+        f"&nbsp;|&nbsp; {kind}" + (f" &nbsp;|&nbsp; x{p['qty']}" if p["qty"] > 1 else ""),
+        unsafe_allow_html=True)
+
+    if "note" in r:
+        st.warning(r["note"])
+        if r["options_total"]:
+            st.caption(f"Priced options/extras listed in the paste total {_money(r['options_total'])}.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Base estimate (list)", _money(r["base_total"]),
+              help=f"Likely range {_money(r['low'])} - {_money(r['high'])}")
+    c2.metric("Options & extras (as quoted)", _money(r["options_total"]))
+    c3.metric("Estimated line total", _money(r["line_total"]),
+              help=f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}. "
+                   f"Includes {disc:.0f}% discount on the base only." if disc else
+                   f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}.")
+    st.caption(f"Base likely range {_money(r['low'])} - {_money(r['high'])} (list, before discount). "
+               f"Ex GST.")
+    if "quoted_base" in r:
+        st.info(f"The pasted quote lists the base at {_money(r['quoted_base'])}; "
+                f"this model gives {_money(r['base_total'])} ({r['vs_quoted_pct']:+.1f}%).")
+    if not r["in_range"]:
+        lo, hi = r["fit_range"]
+        st.warning(f"{r['area']:.2f} m2 is outside the {lo}-{hi} m2 range this model was fitted on.")
+    for w_ in p["warnings"]:
+        st.warning(w_)
+
+    st.button("Show this size in the diagram", key="qe_apply",
+              on_click=_apply_to_diagram,
+              args=(p["w"], p["h"], p["opener"] or p["is_door"], p["tilt_turn"]))
+
+    with st.expander("What was detected / breakdown"):
+        st.write({
+            "system": p["system"], "glass": p["glass"],
+            "type": kind, "tilt & turn": p["tilt_turn"], "concealed hinges": p["concealed"],
+            "outward (DX)": p["outward"], "triple / 88": p["triple"], "6/6 glass": p["glass_6"],
+            "price index": r["index"],
+        })
+        st.table({"Base component": [l for l, _ in r["lines"]],
+                  "Each ($, list)": [f"{a:,.2f}" for _, a in r["lines"]]})
+        if p["options"]:
+            st.table({"Option (from paste)": [o["name"] for o in p["options"]],
+                      "Value ($)": [f"{o['value']:,.2f}" for o in p["options"]]})
+        st.caption("Estimate only - not a Logikhaus quote. Rectangular windows and hinged doors only.")
