@@ -303,7 +303,8 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
     unused (kept so the app.py call doesn't change)."""
     (eyebrow or st.subheader)("Price estimate")
     st.caption("Fill in the lines from the quote. Only size is required; the more you "
-               "give it, the better the estimate. Pasting 'System: ...' with its label is fine.")
+               "give it, the better the estimate. Pasting 'System: ...' with its label is fine. "
+               "Options like handles and flyscreens are not included.")
 
     c1, c2, c3 = st.columns([1, 1.2, 0.6])
     name = c1.text_input("Position name", key="qe_name", placeholder="W01 or D02",
@@ -323,16 +324,7 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
     notes = c7.text_input("Notes", key="qe_notes",
                           placeholder="e.g. Outward opening entrance door; 3 units joined onsite")
 
-    c8, c9 = st.columns([2.2, 1])
-    options = c8.text_area("Priced options (optional)", key="qe_options", height=110,
-                           placeholder="1. WINKHAUS AV4D: - auto espag\n1 x 189.58 = 189.58\n"
-                                       "2. KEYED ALIKE: ...\n1 x 43.75 = 43.75",
-                           help="Paste the numbered option lines as they appear on the quote. "
-                                "They're added as quoted and also reveal the price list.")
-    quoted = c9.text_input("Quoted base price (optional)", key="qe_quoted", placeholder="7728.31",
-                           help="Only used to show how close the estimate is.")
-
-    block = _compose_block(name, size, qty, system, glass, fitting, notes, options, quoted)
+    block = _compose_block(name, size, qty, system, glass, fitting, notes, "", "")
     if block is None:
         st.info("Enter a size such as 1100 x 2048 to get an estimate.")
         return
@@ -342,13 +334,11 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
         return
 
     with st.expander("Advanced: price list index / discount"):
-        detected = p["index"]
-        st.caption(
-            f"Detected price list index: {detected if detected else 'none (add priced options to detect it)'}. "
-            "1.00 = v22, 0.986 = v23.1 (Duggan), 0.90 = Ayling-style.")
+        st.caption("1.00 = v22 list (Alphington / Wickins), 0.986 = v23.1 (Duggan), "
+                   "0.90 = Ayling-style (discount already in the prices, so set discount to 0).")
         idx = st.number_input("Price list index", min_value=0.5, max_value=1.5,
-                              value=float(detected or 1.0), step=0.001, format="%.4f")
-        disc = st.number_input("Discount on base (%) - options aren't discounted",
+                              value=1.0, step=0.001, format="%.4f")
+        disc = st.number_input("Discount (%)",
                                min_value=0.0, max_value=50.0,
                                value=10.0 if idx > 0.95 else 0.0, step=1.0)
 
@@ -362,22 +352,14 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
 
     if "note" in r:
         st.warning(r["note"])
-        if r["options_total"]:
-            st.caption(f"Priced options/extras entered total {_money(r['options_total'])}.")
         return
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Base estimate (list)", _money(r["base_total"]),
+    m1, m2 = st.columns(2)
+    m1.metric("Estimate (list price)", _money(r["base_total"]),
               help=f"Likely range {_money(r['low'])} - {_money(r['high'])}")
-    m2.metric("Options & extras (as quoted)", _money(r["options_total"]))
-    m3.metric("Estimated line total", _money(r["line_total"]),
-              help=(f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}. "
-                    f"Includes {disc:.0f}% discount on the base only.") if disc else
-                   f"Likely range {_money(r['line_low'])} - {_money(r['line_high'])}.")
-    st.caption(f"Base likely range {_money(r['low'])} - {_money(r['high'])} (list, before discount). Ex GST.")
-    if "quoted_base" in r:
-        st.info(f"The quote lists the base at {_money(r['quoted_base'])}; "
-                f"this model gives {_money(r['base_total'])} ({r['vs_quoted_pct']:+.1f}%).")
+    m2.metric(f"After {disc:.0f}% discount" if disc else "Net (no discount)", _money(r["net_base"]),
+              help=f"Likely range {_money(r['net_low'])} - {_money(r['net_high'])}")
+    st.caption(f"Likely range {_money(r['low'])} - {_money(r['high'])} at list price. Ex GST.")
     if not r["in_range"]:
         lo, hi = r["fit_range"]
         st.warning(f"{r['area']:.2f} m2 is outside the {lo}-{hi} m2 range this model was fitted on.")
@@ -397,7 +379,4 @@ def render_quote_estimator(width_mm=None, height_mm=None, eyebrow=None):
         })
         st.table({"Base component": [l for l, _ in r["lines"]],
                   "Each ($, list)": [f"{a:,.2f}" for _, a in r["lines"]]})
-        if p["options"]:
-            st.table({"Option (as entered)": [o["name"] for o in p["options"]],
-                      "Value ($)": [f"{o['value']:,.2f}" for o in p["options"]]})
         st.caption("Estimate only - not a Logikhaus quote. Rectangular windows and hinged doors only.")
