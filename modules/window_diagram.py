@@ -29,6 +29,7 @@ MAX_DRAWING_H = 220
 MARGIN_LEFT   = 30
 MARGIN_TOP    = 30
 DIM_GAP       = 25    # gap between the drawing and its dimension line
+TOTAL_DIM_GAP = 40    # split windows: extra gap down to the overall-width line
 DIM_TICK      = 8     # length of the little end-ticks on dimension lines
 LABEL_FONTSIZE = 16
 
@@ -41,13 +42,13 @@ PDF_PAGE_MARGIN_PT = 40
 # frame profile is the same thickness whatever the window size, so this is
 # in mm rather than a fraction of the window. Scaled with the window's own
 # mm-to-points factor, like everything else.
-FRAME_THICKNESS_MM = 50
+FRAME_THICKNESS_MM = 64
 # Windows whose shorter side is below this get a proportionally thinner
 # frame (e.g. 300 mm -> half thickness), so small windows keep some glass.
 # Every reference window's shorter side was at least 600 mm.
 FRAME_REFERENCE_SIZE_MM = 600
-FRAME_COLOR = (0.95, 0.86, 0.71)   # tan
-GLASS_COLOR = (0.82, 0.28, 0.57)   # magenta, matching the reference image
+FRAME_COLOR = (0.95, 0.86, 0.71)   # light tan, #F2DCB6
+GLASS_COLOR = (0.82, 0.28, 0.57)   # magenta, #D04891, matching the reference images
 
 # ── Opening sash ("swing") ──────────────────────────────────────────────
 # Real-world sizes in mm, measured from the reference drawings. They're
@@ -107,11 +108,13 @@ OPENING_LINE_DASHES = '[4.5 3] 0'
 
 def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR, dpi=100,
                         swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
-                        tilt=False):
+                        tilt=False, split=False, swing_2=False, handle_side_2='left',
+                        tilt_2=False):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
-    width_mm, height_mm: the real window dimensions. Must both be > 0.
+    width_mm, height_mm: the real window dimensions (the OVERALL size,
+        also when split). Must both be > 0.
     frame_color, glass_color: RGB tuples, each channel 0-1 (fitz's
         convention), overridable per call if a specific job needs
         different colours than the defaults.
@@ -130,9 +133,16 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     tilt: True adds the tilt-and-turn opening lines (bottom corners up to
         the middle of the top) to the standard side-hung ones. Only used
         when swing is True.
+    split: True divides the window into two equal panes, side by side,
+        with a mullion (vertical frame member) between them. The overall
+        size stays width_mm x height_mm; each pane is width_mm / 2 wide.
+        swing / handle_side / tilt then apply to the LEFT pane, and
+        swing_2 / handle_side_2 / tilt_2 to the RIGHT pane. The *_2
+        options are ignored when split is False.
     """
-    doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
-                             swing, handle_side, sash_margin_mm, tilt)
+    doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
+                             _pane_options(swing, handle_side, tilt, split,
+                                           swing_2, handle_side_2, tilt_2))
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -141,7 +151,8 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
 
 def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_color=GLASS_COLOR,
                             swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
-                            tilt=False, paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
+                            tilt=False, split=False, swing_2=False, handle_side_2='left',
+                            tilt_2=False, paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
     on a blank page (A4 by default) and enlarged to fill it, centred.
@@ -156,8 +167,9 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     paper: any paper size name fitz understands ('a4', 'a3', 'letter', ...).
     page_margin_pt: blank border around the diagram, in points (72 pt = 1 inch).
     """
-    diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
-                                 swing, handle_side, sash_margin_mm, tilt)
+    diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
+                                 _pane_options(swing, handle_side, tilt, split,
+                                               swing_2, handle_side_2, tilt_2))
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -183,19 +195,38 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     return pdf_bytes
 
 
-def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
-                       swing, handle_side, sash_margin_mm, tilt):
+def _pane_options(swing, handle_side, tilt, split, swing_2, handle_side_2, tilt_2):
+    """
+    Turn the public arguments into one options dict per pane (one pane,
+    or two side by side when split), validating the handle sides.
+    """
+    panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt)]
+    if split:
+        panes.append(dict(swing=swing_2, handle_side=handle_side_2, tilt=tilt_2))
+    for pane in panes:
+        if pane['handle_side'] not in ('left', 'right'):
+            raise ValueError(f"handle side must be 'left' or 'right' (got {pane['handle_side']!r})")
+    return panes
+
+
+def _format_mm(value):
+    """A dimension label: whole numbers as-is ("850"), halves kept ("850.5")."""
+    return f'{value:g}'
+
+
+def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm, panes):
     """
     Draw the diagram onto a new one-page fitz.Document and return it.
     Shared by draw_window_diagram() (PNG preview) and
     draw_window_diagram_pdf() (PDF), so both always show exactly the
-    same drawing. Arguments as documented on draw_window_diagram().
-    The caller is responsible for closing the returned document.
+    same drawing. panes is the list from _pane_options(): one dict for a
+    single window, two for a split one. Other arguments as documented on
+    draw_window_diagram(). The caller is responsible for closing the
+    returned document.
     """
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError(f"width_mm and height_mm must both be positive (got {width_mm}, {height_mm})")
-    if handle_side not in ('left', 'right'):
-        raise ValueError(f"handle_side must be 'left' or 'right' (got {handle_side!r})")
+    split = len(panes) == 2
 
     scale = min(MAX_DRAWING_W / width_mm, MAX_DRAWING_H / height_mm)
     draw_w = width_mm * scale
@@ -203,29 +234,40 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
 
     page_w = MARGIN_LEFT + draw_w + 90   # extra room for the height dimension label
     page_h = MARGIN_TOP + draw_h + DIM_GAP + 40
+    if split:
+        page_h += TOTAL_DIM_GAP          # room for the second (overall) width line
 
     doc = fitz.open()
     page = doc.new_page(width=page_w, height=page_h)
 
     x0, y0 = MARGIN_LEFT, MARGIN_TOP
     x1, y1 = x0 + draw_w, y0 + draw_h
+    xm = (x0 + x1) / 2                   # centre line (the mullion, when split)
     outer = fitz.Rect(x0, y0, x1, y1)
 
     shorter_side_mm = min(width_mm, height_mm)
     frame_thickness = (FRAME_THICKNESS_MM * scale
                        * min(1.0, shorter_side_mm / FRAME_REFERENCE_SIZE_MM))
-    inner = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
-                       x1 - frame_thickness, y1 - frame_thickness)
+    # The mullion is the same thickness as the frame, centred on xm.
+    mullion_half = frame_thickness / 2
 
     page.draw_rect(outer, color=(0.2, 0.2, 0.2), fill=frame_color, width=1.2)
-    page.draw_rect(inner, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+    if split:
+        left_glass  = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
+                                xm - mullion_half, y1 - frame_thickness)
+        right_glass = fitz.Rect(xm + mullion_half, y0 + frame_thickness,
+                                x1 - frame_thickness, y1 - frame_thickness)
+        page.draw_rect(left_glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+        page.draw_rect(right_glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+    else:
+        inner = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
+                          x1 - frame_thickness, y1 - frame_thickness)
+        page.draw_rect(inner, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
 
-    # Frame construction seams: the LEFT and RIGHT stiles run the FULL
-    # outer height, corner to corner -- the top and bottom rails are
-    # shorter, fitted in the gap between the left/right stiles rather
-    # than reaching the corners themselves. A short line at each corner,
-    # perpendicular to the frame edge, marks where a stile's edge
-    # crosses over a rail -- four lines total, one per corner.
+    # Frame construction seams: the top and bottom rails run the FULL
+    # width, and the side stiles fit between them. A short line at each
+    # corner, across the stile, marks where a stile meets a rail -- four
+    # lines total, one per corner.
     seam_color = (0.2, 0.2, 0.2)
     top_rail_y    = y0 + frame_thickness
     bottom_rail_y = y1 - frame_thickness
@@ -233,26 +275,42 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
     page.draw_line((x1 - frame_thickness, top_rail_y), (x1, top_rail_y), color=seam_color, width=1)
     page.draw_line((x0, bottom_rail_y), (x0 + frame_thickness, bottom_rail_y), color=seam_color, width=1)
     page.draw_line((x1 - frame_thickness, bottom_rail_y), (x1, bottom_rail_y), color=seam_color, width=1)
+    if split:
+        # The mullion also fits between the rails: continue the rails'
+        # inner edges across it, the same way as at the corners.
+        page.draw_line((xm - mullion_half, top_rail_y), (xm + mullion_half, top_rail_y),
+                       color=seam_color, width=1)
+        page.draw_line((xm - mullion_half, bottom_rail_y), (xm + mullion_half, bottom_rail_y),
+                       color=seam_color, width=1)
 
-    if swing:
-        _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-                   sash_margin_mm, tilt)
+    # Sashes. A split window's panes are each half the outer frame; the
+    # sash leaves only half its usual margin on the mullion side, so the
+    # two sashes sit close together over the mullion.
+    if split:
+        pane_layout = [(fitz.Rect(x0, y0, xm, y1), 'right'),
+                       (fitz.Rect(xm, y0, x1, y1), 'left')]
+    else:
+        pane_layout = [(outer, None)]
+    for options, (pane_rect, mullion_side) in zip(panes, pane_layout):
+        if options['swing']:
+            _draw_sash(page, pane_rect, scale, frame_thickness, frame_color, glass_color,
+                       options['handle_side'], sash_margin_mm, options['tilt'], mullion_side)
 
-    # Width dimension line (below)
+    # Width dimension line (below). Split windows get each pane's width
+    # here, plus the overall width on a second line further down.
+    dim_color = (0.15, 0.15, 0.15)
     dim_y = y1 + DIM_GAP
-    page.draw_line((x0, dim_y), (x1, dim_y), color=(0.15, 0.15, 0.15), width=1)
-    page.draw_line((x0, dim_y - DIM_TICK / 2), (x0, dim_y + DIM_TICK / 2), color=(0.15, 0.15, 0.15), width=1)
-    page.draw_line((x1, dim_y - DIM_TICK / 2), (x1, dim_y + DIM_TICK / 2), color=(0.15, 0.15, 0.15), width=1)
-    width_label = str(int(round(width_mm)))
-    label_w = fitz.get_text_length(width_label, fontsize=LABEL_FONTSIZE)
-    page.insert_text(((x0 + x1) / 2 - label_w / 2, dim_y + 22), width_label,
-                      fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
+    if split:
+        _draw_width_dimension(page, [x0, xm, x1], dim_y,
+                              [_format_mm(width_mm / 2)] * 2, dim_color)
+        dim_y += TOTAL_DIM_GAP
+    _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
 
     # Height dimension line (right)
     dim_x = x1 + DIM_GAP
-    page.draw_line((dim_x, y0), (dim_x, y1), color=(0.15, 0.15, 0.15), width=1)
-    page.draw_line((dim_x - DIM_TICK / 2, y0), (dim_x + DIM_TICK / 2, y0), color=(0.15, 0.15, 0.15), width=1)
-    page.draw_line((dim_x - DIM_TICK / 2, y1), (dim_x + DIM_TICK / 2, y1), color=(0.15, 0.15, 0.15), width=1)
+    page.draw_line((dim_x, y0), (dim_x, y1), color=dim_color, width=1)
+    page.draw_line((dim_x - DIM_TICK / 2, y0), (dim_x + DIM_TICK / 2, y0), color=dim_color, width=1)
+    page.draw_line((dim_x - DIM_TICK / 2, y1), (dim_x + DIM_TICK / 2, y1), color=dim_color, width=1)
     height_label = str(int(round(height_mm)))
     page.insert_text((dim_x + 10, (y0 + y1) / 2 + 5), height_label,
                       fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
@@ -260,16 +318,35 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color,
     return doc
 
 
+def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
+    """
+    One horizontal dimension line at height dim_y, with a tick at every x
+    in xs (left to right) and labels[i] centred under the span from xs[i]
+    to xs[i + 1].
+    """
+    page.draw_line((xs[0], dim_y), (xs[-1], dim_y), color=dim_color, width=1)
+    for x in xs:
+        page.draw_line((x, dim_y - DIM_TICK / 2), (x, dim_y + DIM_TICK / 2), color=dim_color, width=1)
+    for label, left, right in zip(labels, xs, xs[1:]):
+        label_w = fitz.get_text_length(label, fontsize=LABEL_FONTSIZE)
+        page.insert_text(((left + right) / 2 - label_w / 2, dim_y + 22), label,
+                          fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
+
+
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-               sash_margin_mm, tilt):
+               sash_margin_mm, tilt, mullion_side=None):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
-    outer: the window's outer frame rectangle, in points.
+    outer: the area the sash belongs to, in points -- the window's whole
+        outer frame, or one half of it for a split window.
     scale: points per mm, the same factor used for the window itself.
     frame_thickness: the fixed frame's thickness in points, as drawn.
+    mullion_side: for a split window's pane, 'left' or 'right' -- the
+        side facing the mullion, where the sash margin is halved. None
+        for a single window.
 
-    Parts are drawn at their real mm sizes on windows whose shorter side
+    Parts are drawn at their real mm sizes on panes whose shorter side
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
 
     Layout (matching the reference drawings): the sash is inset from the
@@ -287,8 +364,10 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     # Capped against the fixed frame's thickness (see
     # SASH_MARGIN_MAX_FRAME_RATIO), which matters mostly on small windows.
     inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
-    sash = fitz.Rect(outer.x0 + inset, outer.y0 + inset,
-                     outer.x1 - inset, outer.y1 - inset)
+    left_inset  = inset / 2 if mullion_side == 'left' else inset
+    right_inset = inset / 2 if mullion_side == 'right' else inset
+    sash = fitz.Rect(outer.x0 + left_inset, outer.y0 + inset,
+                     outer.x1 - right_inset, outer.y1 - inset)
 
     max_across = sash.width * SASH_MEMBER_MAX_RATIO
     max_down   = sash.height * SASH_MEMBER_MAX_RATIO

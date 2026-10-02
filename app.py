@@ -13,18 +13,17 @@ from modules.certificate_creator import (
     extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
     WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP, debug_quote_extraction,
 )
-from modules.lhh_image_lookup import get_hardware_loader
+from modules.lhh_image_lookup import load_lhh_lookup, list_drive_images
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 from modules.window_diagram import draw_window_diagram, draw_window_diagram_pdf
-from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDF Fixr Tool",
+    page_title="Logikhaus PDF Fixr",
     page_icon="🪟",
     layout="centered"
 )
@@ -69,10 +68,10 @@ with col_view3:
 with col_view4:
     with st.container(key="tab_window_diagram"):
         if st.button(
-            "Quote Estimator", use_container_width=True,
-            type="primary" if st.session_state.active_view == 'Quote Estimator' else "secondary",
+            "Window Diagram Creator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Window Diagram Creator' else "secondary",
         ):
-            st.session_state.active_view = 'Quote Estimator'
+            st.session_state.active_view = 'Window Diagram Creator'
             st.rerun()
 
 st.markdown("---")
@@ -92,7 +91,7 @@ def render_mass_preview(result, doc):
     def highlight_row(row):
         original = rows[row.name]
         if original.get('_skip'):
-            return ['color: #888'] * len(row)
+            return ['color: #bbb'] * len(row)
         if 'No LHG' in str(row.get('Weight', '')) or 'skipped' in str(row.get('Weight', '')):
             return ['color: #c0392b'] * len(row)
         return [''] * len(row)
@@ -237,7 +236,7 @@ def render_legend_preview(status):
         st.markdown('<div class="status-box">Legend page already present- not duplicated</div>',
                      unsafe_allow_html=True)
     elif status == 'missing_file':
-        st.warning('LEGEND page for Schedule.pdf not found in assets/templates - legend page was not added.')
+        st.warning('LEGEND_page_for_Schedule.pdf not found in the app folder- legend page was not added.')
 
 
 def start_new_document(file_bytes, file_name, unique_id):
@@ -272,17 +271,6 @@ def sanitize_filename_part(text):
 # ═════════════════════════════════════════════════════════════════════════
 if st.session_state.active_view == 'PDF Modifier':
 
-    # ── Hardware data (sheet + Drive images): start loading in the BACKGROUND.
-    # get_hardware_loader() returns immediately; nothing needs this data until
-    # the Hardware Schedule step, so uploading a schedule and running the first
-    # few steps can happen while it loads. Started before the glass/frame loads
-    # below so it's already running during them.
-    hw_loader, hw_start_error = None, None
-    try:
-        hw_loader = get_hardware_loader()
-    except Exception as e:
-        hw_start_error = f'{type(e).__name__}: {e}'
-
     # ── Load reference data (Google Sheets - independent of any uploaded PDF)
     try:
         with st.spinner('Loading glass data from sheet...'):
@@ -310,36 +298,19 @@ if st.session_state.active_view == 'PDF Modifier':
         st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
                    f'({type(e).__name__}: {e})')
 
-    # Hardware status. This is a snapshot taken on each run (it does NOT refresh
-    # by itself -- an auto-refreshing box could interrupt a step part-way through
-    # applying); it updates the next time anything on the page is clicked.
-    hw = hw_loader.snapshot() if hw_loader else None
-    hw_data = hw_loader.data() if hw_loader else None      # (lookup, images, image_cache) or None
-    lhh_lookup, lhh_drive_images, lhh_image_cache = hw_data if hw_data else (None, None, None)
-
-    if hw is None:
-        st.warning(f'Could not start hardware lookup- the Hardware Schedule step will be skippable only. '
-                   f'({hw_start_error})')
-    elif hw['ready']:
-        caching = (f" - caching images in the background ({hw['cached']}/{hw['prefetch_total']})"
-                   if hw['prefetching'] else "")
+    lhh_lookup, lhh_drive_images = None, None
+    try:
+        with st.spinner('Loading hardware lookup...'):
+            lhh_lookup = load_lhh_lookup()
+            lhh_drive_images = list_drive_images()
         st.markdown(
             f'<div class="status-box">✓ Hardware lookup loaded - '
-            f'{hw["codes"]} codes, {hw["images"]} images{caching}</div>',
+            f'{len(lhh_lookup)} codes, {len(lhh_drive_images)} images</div>',
             unsafe_allow_html=True
         )
-    elif hw['status'] == 'error':
+    except Exception as e:
         st.warning(f'Could not load hardware lookup- the Hardware Schedule step will be skippable only. '
-                   f'({hw["error"]})')
-        if st.button('Retry hardware load', key='hw_retry', type='secondary'):
-            get_hardware_loader(force=True)
-            st.rerun()
-    else:
-        st.markdown(
-            f'<div class="status-box">⏳ Hardware data is loading in the background '
-            f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
-            unsafe_allow_html=True
-        )
+                   f'({type(e).__name__}: {e})')
 
     st.markdown("---")
 
@@ -428,12 +399,7 @@ if st.session_state.active_view == 'PDF Modifier':
                     lhh_lookup is None or lhh_drive_images is None
                 )
                 if hardware_data_missing:
-                    if hw and hw['status'] == 'loading':
-                        st.info(f"Hardware data is still loading in the background ({hw['stage']}). "
-                                "Click Check again in a moment, or Skip.")
-                        st.button("Check again", key="hw_check_again", type="secondary")
-                    else:
-                        st.warning("Hardware lookup isn't available- this step can only be skipped.")
+                    st.warning("Hardware lookup isn't available- this step can only be skipped.")
 
                 # Text replace step needs its own instructions .xlsx uploaded first
                 text_replace_xlsx = None
@@ -482,7 +448,7 @@ if st.session_state.active_view == 'PDF Modifier':
                             )
                         elif step_key == 'hardware_schedule':
                             st.session_state.step_results[step_key] = apply_hardware_schedule(
-                                doc, lhh_lookup, lhh_drive_images, lhh_image_cache
+                                doc, lhh_lookup, lhh_drive_images
                             )
                         elif step_key == 'legend':
                             st.session_state.step_results[step_key] = apply_legend(doc)
@@ -729,7 +695,7 @@ elif st.session_state.active_view == 'Certificate Creator':
                 use_container_width=True,
             )
         else:
-            st.error("Window Compliance Certificate template not found in assets/certificates.")
+            st.error("Window Compliance Certificate template not found in the app folder.")
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -818,9 +784,9 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  VIEW: QUOTE ESTIMATOR (window diagram + price estimate) — fully independent, no other view's state touched
+#  VIEW: WINDOW DIAGRAM CREATOR — fully independent, no other view's state touched
 # ═════════════════════════════════════════════════════════════════════════
-elif st.session_state.active_view == 'Quote Estimator':
+elif st.session_state.active_view == 'Window Diagram Creator':
 
     render_eyebrow("Window dimensions")
     col_w, col_h = st.columns(2)
@@ -833,28 +799,56 @@ elif st.session_state.active_view == 'Quote Estimator':
             "Height (mm)", min_value=1, value=1500, step=10, key="window_diagram_height"
         )
 
-    col_swing, col_handle = st.columns(2)
-    with col_swing:
-        window_swing = st.toggle("Opening sash", value=False, key="window_diagram_swing")
-        # Adds the tilt lines on top of the standard side-hung ones.
-        window_tilt = st.toggle(
-            "Tilt and turn", value=False, key="window_diagram_tilt",
-            disabled=not window_swing,
-        )
-    with col_handle:
-        # Only matters when there's a sash to put the handle on.
-        window_handle_side = st.radio(
-            "Handle side", ["Left", "Right"], index=1, horizontal=True,
-            key="window_diagram_handle_side", disabled=not window_swing,
-        )
+    # Split: the overall size above stays the same, divided into two equal
+    # panes side by side. The first set of options below then controls the
+    # LEFT pane, and a second set appears for the RIGHT pane.
+    window_split = st.checkbox(
+        "Split into two panes", value=False, key="window_diagram_split"
+    )
+
+    def window_pane_controls(key_suffix, default_handle_side):
+        """Opening sash / tilt and turn / handle side for one pane."""
+        col_swing, col_handle = st.columns(2)
+        with col_swing:
+            swing = st.toggle(
+                "Opening sash", value=False, key=f"window_diagram_swing{key_suffix}"
+            )
+            # Adds the tilt lines on top of the standard side-hung ones.
+            tilt = st.toggle(
+                "Tilt and turn", value=False, key=f"window_diagram_tilt{key_suffix}",
+                disabled=not swing,
+            )
+        with col_handle:
+            # Only matters when there's a sash to put the handle on.
+            handle_side = st.radio(
+                "Handle side", ["Left", "Right"],
+                index=["Left", "Right"].index(default_handle_side), horizontal=True,
+                key=f"window_diagram_handle_side{key_suffix}", disabled=not swing,
+            )
+        return swing, tilt, handle_side.lower()
+
+    if window_split:
+        render_eyebrow("Left pane")
+    # Same widget keys whether split or not, so the single window's
+    # settings carry over as the left pane's when splitting.
+    window_swing, window_tilt, window_handle_side = window_pane_controls("", "Right")
+
+    if window_split:
+        render_eyebrow("Right pane")
+        # Handle defaults to the left, so a pair meets in the middle.
+        window_swing_2, window_tilt_2, window_handle_side_2 = window_pane_controls("_2", "Left")
+    else:
+        window_swing_2, window_tilt_2, window_handle_side_2 = False, False, "left"
+
+    diagram_options = dict(
+        swing=window_swing, handle_side=window_handle_side, tilt=window_tilt,
+        split=window_split,
+        swing_2=window_swing_2, handle_side_2=window_handle_side_2, tilt_2=window_tilt_2,
+    )
 
     # No button, no gate -- this is cheap local vector drawing with no
     # network/file I/O involved, so it just redraws on every keystroke.
-    diagram_png = draw_window_diagram(
-        window_width_mm, window_height_mm,
-        swing=window_swing, handle_side=window_handle_side.lower(),
-        tilt=window_tilt,
-    )
+    diagram_png = draw_window_diagram(window_width_mm, window_height_mm, **diagram_options)
 
     st.markdown("---")
     render_eyebrow("Diagram")
@@ -872,19 +866,12 @@ elif st.session_state.active_view == 'Quote Estimator':
 
     # Full-quality version: the same drawing as vector PDF on a blank A4
     # page, sharp at any zoom and ready to print.
-    diagram_pdf = draw_window_diagram_pdf(
-        window_width_mm, window_height_mm,
-        swing=window_swing, handle_side=window_handle_side.lower(),
-        tilt=window_tilt,
-    )
+    diagram_pdf = draw_window_diagram_pdf(window_width_mm, window_height_mm, **diagram_options)
     st.download_button(
         "Download PDF",
         data=diagram_pdf,
-        file_name=f"Window_Diagram_{window_width_mm}x{window_height_mm}.pdf",
+        file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
+                   f"{'_split' if window_split else ''}.pdf"),
         mime="application/pdf",
         key="window_diagram_pdf_download",
     )
-
-    # Price estimate for the same width x height entered above.
-    st.markdown("---")
-    render_quote_estimator(window_width_mm, window_height_mm, eyebrow=render_eyebrow)
