@@ -20,6 +20,7 @@ from modules.steps import (
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 from modules.window_diagram import draw_window_diagram, draw_window_diagram_pdf
+from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -68,10 +69,10 @@ with col_view3:
 with col_view4:
     with st.container(key="tab_window_diagram"):
         if st.button(
-            "Window Diagram Creator", use_container_width=True,
-            type="primary" if st.session_state.active_view == 'Window Diagram Creator' else "secondary",
+            "Quote Estimator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Quote Estimator' else "secondary",
         ):
-            st.session_state.active_view = 'Window Diagram Creator'
+            st.session_state.active_view = 'Quote Estimator'
             st.rerun()
 
 st.markdown("---")
@@ -784,9 +785,9 @@ elif st.session_state.active_view == 'Xero Invoice Creator':
 
 
 # ═════════════════════════════════════════════════════════════════════════
-#  VIEW: WINDOW DIAGRAM CREATOR — fully independent, no other view's state touched
+#  VIEW: QUOTE ESTIMATOR (window diagram + price estimate) — fully independent, no other view's state touched
 # ═════════════════════════════════════════════════════════════════════════
-elif st.session_state.active_view == 'Window Diagram Creator':
+elif st.session_state.active_view == 'Quote Estimator':
 
     render_eyebrow("Window dimensions")
     col_w, col_h = st.columns(2)
@@ -850,3 +851,7 @@ elif st.session_state.active_view == 'Window Diagram Creator':
         mime="application/pdf",
         key="window_diagram_pdf_download",
     )
+
+    # Price estimate for the same width x height entered above.
+    st.markdown("---")
+    render_quote_estimator(window_width_mm, window_height_mm, eyebrow=render_eyebrow)
