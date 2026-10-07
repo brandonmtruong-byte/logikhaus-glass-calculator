@@ -188,7 +188,11 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         meeting in the middle with no mullion, each hinged on its outer
         side, and only one handle -- on the door named by 'handle_side'
         ('left' / 'right'), at the meeting edge. 'swing' / 'tilt' /
-        'tilt_only' are ignored for French doors.
+        'tilt_only' are ignored for French doors. A panel dict with
+        'double_slide': True is a pair of sliding doors instead: two
+        equal halves meeting in the middle, each sliding OUTWARD (arrows
+        pointing away from the middle) over the panel beside it. No
+        handles; the other opening options are ignored.
     panel_widths_mm: each panel's width in mm, left to right, matching
         panels; they must add up to width_mm. None (the default) makes
         the panels equal.
@@ -279,7 +283,8 @@ def _pane_options(swing, handle_side, tilt, tilt_only, split,
         panes = [dict(swing=bool(p.get('swing')), handle_side=p.get('handle_side', 'right'),
                       tilt=bool(p.get('tilt')), tilt_only=bool(p.get('tilt_only')),
                       slide_dir=None,
-                      top_height_mm=p.get('top_height_mm'), french=bool(p.get('french')))
+                      top_height_mm=p.get('top_height_mm'), french=bool(p.get('french')),
+                      double_slide=bool(p.get('double_slide')))
                  for p in panels]
     else:
         panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only,
@@ -341,7 +346,8 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     if dimensioned_top_mm is not None:
         page_w += TOTAL_HEIGHT_DIM_GAP   # room for the second (overall) height line
     page_h = MARGIN_TOP + draw_h + DIM_GAP + 40
-    has_french = any(p.get('french') for p in panes)
+    # Panels drawn as two equal halves (French doors, double sliding).
+    has_french = any(p.get('french') or p.get('double_slide') for p in panes)
     if split or has_french:
         page_h += TOTAL_DIM_GAP          # room for the second (overall) width line
 
@@ -425,12 +431,16 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     else:
         pane_layout = [(outer, None)]
     for options, (pane_rect, mullion_side) in zip(panes, pane_layout):
-        if options['swing'] or options.get('french'):
+        if options['swing'] or options.get('french') or options.get('double_slide'):
             transom_y = _transom_y(options, y0, scale)
             if transom_y is not None:
                 # Only the top section opens; its sash stops at the transom.
                 pane_rect = fitz.Rect(pane_rect.x0, pane_rect.y0, pane_rect.x1, transom_y)
-            if options.get('french'):
+            if options.get('double_slide'):
+                _draw_double_slide(page, pane_rect, scale, frame_thickness, frame_color,
+                                   glass_color, sash_margin_mm, mullion_side,
+                                   transom_below=transom_y is not None)
+            elif options.get('french'):
                 _draw_french_doors(page, pane_rect, scale, frame_thickness, frame_color,
                                    glass_color, options['handle_side'], sash_margin_mm,
                                    mullion_side, transom_below=transom_y is not None)
@@ -448,7 +458,7 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     # their own ticks and labels on this line too.
     dim_xs, dim_widths = [x0], []
     for i, (pane, w_mm) in enumerate(zip(panes, widths_mm)):
-        if pane.get('french'):
+        if pane.get('french') or pane.get('double_slide'):
             dim_xs.append((xs[i] + xs[i + 1]) / 2)
             dim_widths += [w_mm / 2, w_mm / 2]
         else:
@@ -579,6 +589,28 @@ def _draw_french_doors(page, outer, scale, frame_thickness, frame_color, glass_c
                    transom_below=transom_below, meeting_side=meeting(door_side),
                    draw_handle=door_side == handle_side,
                    part_scale_override=part_scale, stile_override=stile)
+
+
+def _draw_double_slide(page, outer, scale, frame_thickness, frame_color, glass_color,
+                       sash_margin_mm, mullion_side, transom_below):
+    """
+    A pair of sliding doors filling `outer` (one panel): two sashes
+    exactly half the width each, meeting in the middle with no mullion,
+    each with an arrow pointing OUTWARD -- the left door slides left and
+    the right door slides right, over the panels beside them. No handles.
+
+    mullion_side / transom_below: as for _draw_sash(), for the panel as a
+    whole -- each door takes the side(s) of these that it touches.
+    """
+    mid = (outer.x0 + outer.x1) / 2
+    for door_side, rect in (('left', fitz.Rect(outer.x0, outer.y0, mid, outer.y1)),
+                            ('right', fitz.Rect(mid, outer.y0, outer.x1, outer.y1))):
+        door_mullion = (door_side if mullion_side == 'both'
+                        else mullion_side if mullion_side == door_side else None)
+        meeting = 'right' if door_side == 'left' else 'left'
+        _draw_sash(page, rect, scale, frame_thickness, frame_color, glass_color,
+                   meeting, sash_margin_mm, False, door_mullion,
+                   slide_dir=door_side, transom_below=transom_below, meeting_side=meeting)
 
 
 def _transom_y(pane, y0, scale):

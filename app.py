@@ -839,7 +839,7 @@ elif st.session_state.active_view == 'Quote Estimator':
     # position means switching between 2 and 3 panels never moves one
     # panel's settings onto another.
     WINDOW_PANEL_TYPES = ["Fixed", "Side-hung", "Tilt & turn", "Tilt only", "French doors",
-                          "Sliding"]
+                          "Sliding", "Double sliding"]
     WINDOW_SLIDE_TILT = ["None", "Tilt", "Tilt & turn"]
     WINDOW_SIDES = ["Left", "Right"]
     WINDOW_POSITIONS = {1: ["left"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
@@ -887,6 +887,8 @@ elif st.session_state.active_view == 'Quote Estimator':
         panel["type"] = st.selectbox("Type", WINDOW_PANEL_TYPES, key=type_key)
 
         show_handle = panel["type"] in ("Side-hung", "Tilt & turn", "French doors")
+        if panel["type"] == "Double sliding":
+            st.caption("Two equal doors, each sliding outward over the panel beside it.")
         if panel["type"] == "Sliding":
             if len(positions) == 2:
                 other = positions[1 - positions.index(pos)]
@@ -961,14 +963,21 @@ elif st.session_state.active_view == 'Quote Estimator':
             st.session_state[f"window_diagram_panel_width_{pos}"]
 
     def window_opening(panel):
-        """(swing, tilt, tilt_only, french) drawing options for a non-sliding panel."""
-        return {
-            "Fixed":        (False, False, False, False),
-            "Side-hung":    (True,  False, False, False),
-            "Tilt & turn":  (True,  True,  False, False),
-            "Tilt only":    (True,  False, True,  False),
-            "French doors": (False, False, False, True),
+        """
+        Drawing options for a panel (any type except the two-panel
+        "Sliding", which is drawn separately).
+        """
+        swing, tilt, tilt_only = {
+            "Fixed":          (False, False, False),
+            "Side-hung":      (True,  False, False),
+            "Tilt & turn":    (True,  True,  False),
+            "Tilt only":      (True,  False, True),
+            "French doors":   (False, False, False),
+            "Double sliding": (False, False, False),
         }[panel["type"]]
+        return dict(swing=swing, tilt=tilt, tilt_only=tilt_only,
+                    french=panel["type"] == "French doors",
+                    double_slide=panel["type"] == "Double sliding")
 
     with col_options:
         render_eyebrow("Size")
@@ -1068,6 +1077,32 @@ elif st.session_state.active_view == 'Quote Estimator':
         to the backend unchanged once panel data comes from there.
         """
         problems = []
+
+        # Double sliding: two doors sliding OUTWARD, so there must be a
+        # fixed panel on each side for them to slide over.
+        doubles = [pos for pos in positions if panels[pos]["type"] == "Double sliding"]
+        if doubles:
+            if len(positions) != 3 or doubles != ["middle"]:
+                problems.append(
+                    "Double sliding doors slide outward over a fixed panel on each "
+                    "side: use 3 panels, with Double sliding as the middle panel only."
+                )
+            else:
+                for side in ("left", "right"):
+                    if panels[side]["type"] != "Fixed":
+                        problems.append(
+                            f"The {side} panel must be Fixed, because the double "
+                            f"sliding doors slide over it. It's currently set to "
+                            f"{panels[side]['type']}."
+                        )
+            with_bottom = [pos for pos in positions if panels[pos].get("bottom")]
+            if with_bottom:
+                problems.append(
+                    "A fixed bottom section can't be used with double sliding doors "
+                    f"(it's turned on for the {' and '.join(with_bottom)} panel"
+                    f"{'s' if len(with_bottom) > 1 else ''})."
+                )
+
         sliders = [pos for pos in positions if panels[pos]["type"] == "Sliding"]
         if not sliders:
             return problems
@@ -1123,9 +1158,8 @@ elif st.session_state.active_view == 'Quote Estimator':
     else:
         diagram_options = dict(panels=[], panel_widths_mm=None)
         for p in row:
-            swing, tilt, tilt_only, french = window_opening(p)
             diagram_options["panels"].append(dict(
-                swing=swing, tilt=tilt, tilt_only=tilt_only, french=french,
+                **window_opening(p),
                 handle_side=p["handle_side"].lower(),
                 top_height_mm=(window_top_mm(p, window_height_mm)
                                if p.get("bottom") and window_height_mm >= 2 else None),
