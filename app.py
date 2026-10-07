@@ -874,42 +874,23 @@ elif st.session_state.active_view == 'Quote Estimator':
 
     def window_panel_controls(pos, positions, height_mm):
         """Type + the options for that type, for the panel at `pos`."""
+        # Every option is always available, whatever the other panels are
+        # set to. Combinations the drawing can't make are reported by
+        # window_layout_problems() below, instead of being prevented here.
         panel = panels[pos]
         type_key = f"window_diagram_type_{pos}"
-        other = None
-        if len(positions) == 2:
-            other = positions[1 - positions.index(pos)]
-            # The other panel's CURRENT type: its widget value is already
-            # updated in session state at the start of the run, even before
-            # its tab is drawn, so this is never one change behind.
-            other_type = st.session_state.get(f"window_diagram_type_{other}", panels[other]["type"])
-
-        if other is not None and other_type == "Sliding":
-            # The other panel slides over this one, so this one is fixed.
-            allowed = ["Fixed"]
-        elif len(positions) == 2:
-            allowed = WINDOW_PANEL_TYPES
-        else:
-            # Sliding is a two-panel window (one slides, the other is fixed).
-            allowed = [t for t in WINDOW_PANEL_TYPES if t != "Sliding"]
-
-        if panel["type"] not in allowed:
-            panel["type"] = allowed[0]
         # Widgets get their starting value through session state (not
         # index=), so Streamlit doesn't warn about a value being set both
         # ways when the Quote Estimator pushes a panel type in.
-        if st.session_state.get(type_key) not in allowed:
+        if st.session_state.get(type_key) not in WINDOW_PANEL_TYPES:
             st.session_state[type_key] = panel["type"]
-
-        panel["type"] = st.selectbox(
-            "Type", allowed, key=type_key, disabled=len(allowed) == 1,
-        )
-        if len(allowed) == 1:
-            st.caption("Fixed, because the other panel slides.")
+        panel["type"] = st.selectbox("Type", WINDOW_PANEL_TYPES, key=type_key)
 
         show_handle = panel["type"] in ("Side-hung", "Tilt & turn", "French doors")
         if panel["type"] == "Sliding":
-            st.caption(f"Slides towards the {other} panel.")
+            if len(positions) == 2:
+                other = positions[1 - positions.index(pos)]
+                st.caption(f"Slides towards the {other} panel.")
             tilt_key = f"window_diagram_slide_tilt_{pos}"
             if st.session_state.get(tilt_key) not in WINDOW_SLIDE_TILT:
                 st.session_state[tilt_key] = panel["slide_tilt"]
@@ -931,10 +912,9 @@ elif st.session_state.active_view == 'Quote Estimator':
             )
 
         # Fixed bottom section: splits this panel with a transom. The type
-        # above applies to the top section; the bottom is always fixed. Not
-        # offered on sliding windows (neither the sliding panel nor its
-        # fixed partner), or on windows too short to split.
-        if panel["type"] != "Sliding" and len(allowed) > 1 and height_mm >= 2:
+        # above applies to the top section; the bottom is always fixed.
+        # (Only hidden on windows under 2 mm tall, which can't be split.)
+        if height_mm >= 2:
             bottom_key = f"window_diagram_bottom_{pos}"
             if bottom_key not in st.session_state:
                 st.session_state[bottom_key] = panel.get("bottom", False)
@@ -1080,10 +1060,56 @@ elif st.session_state.active_view == 'Quote Estimator':
                         )
                     window_panel_controls(pos, positions, window_height_mm)
 
-    # Turn the panels into the drawing's options.
+    def window_layout_problems(positions):
+        """
+        Reasons the current panels can't be drawn (an empty list if they
+        can). Nothing in the controls prevents these combinations -- this
+        is the single place that decides what's possible, so it can move
+        to the backend unchanged once panel data comes from there.
+        """
+        problems = []
+        sliders = [pos for pos in positions if panels[pos]["type"] == "Sliding"]
+        if not sliders:
+            return problems
+        if len(positions) == 1:
+            problems.append(
+                "A single panel can't slide: a sliding panel needs a fixed panel "
+                "beside it to slide over. Choose 2 panels."
+            )
+        elif len(positions) == 3:
+            problems.append(
+                "Sliding only works on 2-panel windows (one sliding panel and one "
+                "fixed panel), not 3."
+            )
+        elif len(sliders) == 2:
+            problems.append(
+                "Only one panel can slide: the other must be the fixed panel it "
+                "slides over."
+            )
+        else:
+            other = positions[1 - positions.index(sliders[0])]
+            if panels[other]["type"] != "Fixed":
+                problems.append(
+                    f"The {other} panel must be Fixed, because the sliding "
+                    f"{sliders[0]} panel slides over it. It's currently set to "
+                    f"{panels[other]['type']}."
+                )
+        with_bottom = [pos for pos in positions if panels[pos].get("bottom")]
+        if with_bottom:
+            problems.append(
+                "A fixed bottom section can't be used on a sliding window "
+                f"(it's turned on for the {' and '.join(with_bottom)} panel"
+                f"{'s' if len(with_bottom) > 1 else ''})."
+            )
+        return problems
+
+    # Turn the panels into the drawing's options (when they can be drawn).
     window_slide = False
+    window_problems = window_layout_problems(positions)
     row = [panels[pos] for pos in positions]
-    if panel_count == 2 and any(p["type"] == "Sliding" for p in row):
+    if window_problems:
+        diagram_options = None
+    elif panel_count == 2 and any(p["type"] == "Sliding" for p in row):
         slider_pos = "left" if panels["left"]["type"] == "Sliding" else "right"
         slider = panels[slider_pos]
         window_slide = True
@@ -1111,37 +1137,52 @@ elif st.session_state.active_view == 'Quote Estimator':
         with st.container(key="window_diagram_panel"):
             render_eyebrow("Diagram")
 
-            # No button, no gate -- this is cheap local vector drawing with
-            # no network/file I/O involved, so it just redraws on every change.
-            diagram_png = draw_window_diagram(window_width_mm, window_height_mm, **diagram_options)
+            if window_problems:
+                # Not drawable: say why, in place of the diagram. A toast pops
+                # up too, but only when the reasons change (not every rerun).
+                if st.session_state.get("window_diagram_last_problems") != window_problems:
+                    st.toast("This window isn't possible -- see the Diagram panel.", icon="⚠️")
+                st.session_state["window_diagram_last_problems"] = window_problems
+                st.warning(
+                    "**Not possible**\n\n" + "\n".join(f"- {p}" for p in window_problems),
+                    icon="⚠️",
+                )
+            else:
+                st.session_state["window_diagram_last_problems"] = None
 
-            # Fit the diagram inside a max width (half the page) AND a max
-            # height, so tall windows don't grow too tall on screen.
-            MAX_DIAGRAM_WIDTH  = 360
-            MAX_DIAGRAM_HEIGHT = 450
-            diagram_pix = fitz.Pixmap(diagram_png)
-            display_width = min(
-                MAX_DIAGRAM_WIDTH,
-                int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
-            )
-            st.image(diagram_png, width=display_width)
+                # No button, no gate -- this is cheap local vector drawing with
+                # no network/file I/O involved, so it just redraws on every change.
+                diagram_png = draw_window_diagram(window_width_mm, window_height_mm,
+                                                  **diagram_options)
 
-            # Full-quality version: the same drawing as vector PDF on a blank
-            # A4 page, sharp at any zoom and ready to print.
-            diagram_pdf = draw_window_diagram_pdf(
-                window_width_mm, window_height_mm, **diagram_options
-            )
-            st.download_button(
-                "Download PDF",
-                data=diagram_pdf,
-                file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
-                           f"{'_sliding' if window_slide else ''}"
-                           f"{f'_{panel_count}panel' if panel_count > 1 and not window_slide else ''}"
-                           ".pdf"),
-                mime="application/pdf",
-                key="window_diagram_pdf_download",
-            )
+                # Fit the diagram inside a max width (half the page) AND a max
+                # height, so tall windows don't grow too tall on screen.
+                MAX_DIAGRAM_WIDTH  = 360
+                MAX_DIAGRAM_HEIGHT = 450
+                diagram_pix = fitz.Pixmap(diagram_png)
+                display_width = min(
+                    MAX_DIAGRAM_WIDTH,
+                    int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
+                )
+                st.image(diagram_png, width=display_width)
+
+                # Full-quality version: the same drawing as vector PDF on a
+                # blank A4 page, sharp at any zoom and ready to print.
+                diagram_pdf = draw_window_diagram_pdf(
+                    window_width_mm, window_height_mm, **diagram_options
+                )
+                st.download_button(
+                    "Download PDF",
+                    data=diagram_pdf,
+                    file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
+                               f"{'_sliding' if window_slide else ''}"
+                               f"{f'_{panel_count}panel' if panel_count > 1 and not window_slide else ''}"
+                               ".pdf"),
+                    mime="application/pdf",
+                    key="window_diagram_pdf_download",
+                )
 
     # Price estimate for the same width x height entered above.
     st.markdown("---")
     render_quote_estimator(window_width_mm, window_height_mm, eyebrow=render_eyebrow)
+

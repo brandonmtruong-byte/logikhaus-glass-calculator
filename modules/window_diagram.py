@@ -116,6 +116,11 @@ SLIDE_ARROW_INSET_RATIO = 0.12
 SLIDE_ARROW_HEAD_RATIO  = 0.13    # arrowhead length, as a fraction of the arrow
 SLIDE_ARROW_HEAD_MAX_PT = 14
 SLIDE_ARROW_COLOR = (0.25, 0.25, 0.25)
+
+# French doors: how far each door reaches past the middle line, in real mm
+# (scaled with the window like the sash parts). The door with the handle
+# is drawn last, so its overlap sits on top, as in the reference drawings.
+FRENCH_OVERLAP_MM = 25
 SLIDE_ARROW_WIDTH = 0.8
 
 
@@ -483,8 +488,9 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
 def _draw_french_doors(page, outer, scale, frame_thickness, frame_color, glass_color,
                        handle_side, sash_margin_mm, mullion_side, transom_below):
     """
-    A pair of French doors filling `outer` (one panel): two doors exactly
-    half the width each, meeting in the middle with no mullion. Each is
+    A pair of French doors filling `outer` (one panel): two doors each
+    sized to exactly half the width, meeting in the middle with no mullion
+    and overlapping slightly there (FRENCH_OVERLAP_MM). Each is
     hinged on its OUTER side, so both sets of opening lines point to the
     middle. Only the door on handle_side ('left' / 'right') gets a handle,
     at the meeting edge.
@@ -493,8 +499,16 @@ def _draw_french_doors(page, outer, scale, frame_thickness, frame_color, glass_c
     whole -- each door takes the side(s) of these that it touches.
     """
     mid = (outer.x0 + outer.x1) / 2
-    for door_side, rect in (('left', fitz.Rect(outer.x0, outer.y0, mid, outer.y1)),
-                            ('right', fitz.Rect(mid, outer.y0, outer.x1, outer.y1))):
+    # Each door reaches FRENCH_OVERLAP_MM past the middle, shrunk on small
+    # doors the same way as the sash parts (see SASH_REFERENCE_SIZE_MM).
+    door_short_mm = min(outer.width / 2, outer.height) / scale
+    overlap = FRENCH_OVERLAP_MM * scale * min(1.0, door_short_mm / SASH_REFERENCE_SIZE_MM)
+    doors = {'left': fitz.Rect(outer.x0, outer.y0, mid + overlap, outer.y1),
+             'right': fitz.Rect(mid - overlap, outer.y0, outer.x1, outer.y1)}
+    # The door without the handle first, so the active door is on top.
+    passive = 'left' if handle_side == 'right' else 'right'
+    for door_side in (passive, handle_side):
+        rect = doors[door_side]
         # Keep a mullion only on this door's own outer side.
         door_mullion = mullion_side if mullion_side in (door_side, None) else None
         if mullion_side == 'both':
