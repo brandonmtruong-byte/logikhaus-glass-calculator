@@ -326,10 +326,14 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         if top_mm is not None and not 0 < top_mm < height_mm:
             raise ValueError(f"top_height_mm must be between 0 and height_mm "
                              f"(got {top_mm} for height {height_mm})")
-    # The first panel with a bottom section sets the top/bottom height
-    # dimension (panels with different top heights only show the first).
-    dimensioned_top_mm = next((p['top_height_mm'] for p in panes
-                               if p.get('top_height_mm') is not None), None)
+    # Every DIFFERENT top-section height gets its own top/bottom height
+    # dimension line, in left-to-right panel order (panels sharing a top
+    # height share a line).
+    dimensioned_tops_mm = []
+    for p in panes:
+        top_mm = p.get('top_height_mm')
+        if top_mm is not None and top_mm not in dimensioned_tops_mm:
+            dimensioned_tops_mm.append(top_mm)
     if panel_widths_mm is not None:
         if len(panel_widths_mm) != count:
             raise ValueError(f"panel_widths_mm has {len(panel_widths_mm)} widths "
@@ -343,8 +347,8 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     draw_h = height_mm * scale
 
     page_w = MARGIN_LEFT + draw_w + 90   # extra room for the height dimension label
-    if dimensioned_top_mm is not None:
-        page_w += TOTAL_HEIGHT_DIM_GAP   # room for the second (overall) height line
+    # Room for each top/bottom height line, before the overall height line.
+    page_w += TOTAL_HEIGHT_DIM_GAP * len(dimensioned_tops_mm)
     page_h = MARGIN_TOP + draw_h + DIM_GAP + 40
     # Panels drawn as two equal halves (French doors, double sliding).
     has_french = any(p.get('french') or p.get('double_slide') for p in panes)
@@ -471,11 +475,11 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         dim_y += TOTAL_DIM_GAP
     _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
 
-    # Height dimension line (right). With a fixed bottom section, the top
-    # and bottom heights go on this line, and the overall height on a
-    # second line further right.
+    # Height dimension lines (right). Each different fixed-bottom-section
+    # top height gets a line of its own showing its top and bottom heights,
+    # and the overall height goes on the last line, furthest right.
     dim_x = x1 + DIM_GAP
-    if dimensioned_top_mm is not None:
+    for dimensioned_top_mm in dimensioned_tops_mm:
         transom_y = y0 + dimensioned_top_mm * scale
         page.draw_line((dim_x, y0), (dim_x, y1), color=dim_color, width=1)
         for y in (y0, transom_y, y1):
