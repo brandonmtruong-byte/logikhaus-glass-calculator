@@ -1,0 +1,20 @@
+# Streamlit theme for the Logikhaus app.
+# Light and dark mode each get their own settings, so the app still follows
+# each person's Light / Dark / system choice.
+
+[theme.light]
+# Brand red for sliders, radio buttons, toggles, checkboxes and focus
+# outlines. Strong contrast on the white background.
+primaryColor = "#A13336"
+# Fill of input boxes, dropdowns and the sidebar: a little darker than
+# Streamlit's default, so they stand out from the white page.
+secondaryBackgroundColor = "#E6E9EE"
+# A visible border around input boxes and dropdowns.
+borderColor = "#A9B0BA"
+showWidgetBorder = true
+
+[theme.dark]
+# A lighter tint of the brand red: the exact brand red is too dark to see
+# clearly on the dark background. Everything else stays Streamlit's
+# default dark theme.
+primaryColor = "#D9575B"

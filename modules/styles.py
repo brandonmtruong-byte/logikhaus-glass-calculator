@@ -231,84 +231,8 @@ CUSTOM_CSS = """
 """
 
 
-# LIGHT MODE ONLY: on a white page, Streamlit's default light-grey input
-# boxes and outline buttons barely stand out. These rules give them a
-# slightly darker fill and a visible border. They're only added when the
-# app is in Light mode (see inject_css()), so Dark mode is untouched.
-LIGHT_MODE_CSS = """
-    /* Text / number / dropdown / text-area boxes: darker fill + border. */
-    div[data-testid="stNumberInputContainer"],
-    div[data-testid="stTextInputRootElement"],
-    div[data-baseweb="select"] > div,
-    div[data-baseweb="textarea"] {
-        background-color: #E6E9EE !important;
-        border: 1px solid #A9B0BA !important;
-        border-radius: 0.5rem !important;
-    }
-    /* The parts inside a box take the box's fill, so it reads as one box
-       (no second border or a lighter strip behind the number). */
-    div[data-testid="stNumberInputContainer"] div[data-baseweb="input"],
-    div[data-testid="stNumberInputContainer"] input,
-    div[data-testid="stNumberInputContainer"] button,
-    div[data-testid="stTextInputRootElement"] div[data-baseweb="input"],
-    div[data-testid="stTextInputRootElement"] input,
-    div[data-baseweb="textarea"] textarea {
-        background-color: transparent !important;
-        border: none !important;
-    }
-    div[data-testid="stNumberInputContainer"] button:hover {
-        background-color: rgba(0, 0, 0, 0.08) !important;
-    }
-
-    /* Outline (secondary) buttons: firmer border and a light fill. */
-    div[data-testid="stButton"] button[kind="secondary"] {
-        background: #EEF0F3 !important;
-        border: 1px solid #8C939E !important;
-    }
-    div[data-testid="stButton"] button[kind="secondary"]:hover {
-        background: #E1E4E9 !important;
-    }
-
-    /* File upload drop area. */
-    section[data-testid="stFileUploaderDropzone"] {
-        background-color: #E6E9EE !important;
-        border: 1px dashed #A9B0BA !important;
-    }
-
-    /* View switcher: darker underline and text on the inactive tabs. */
-    div[class*="st-key-tab_pdf_modifier"] div[data-testid="stButton"] button,
-    div[class*="st-key-tab_certificate_creator"] div[data-testid="stButton"] button,
-    div[class*="st-key-tab_xero_invoice_creator"] div[data-testid="stButton"] button,
-    div[class*="st-key-tab_window_diagram"] div[data-testid="stButton"] button {
-        border-bottom-color: #B3B9C2 !important;
-        opacity: 0.8;
-    }
-"""
-
-
-def _theme_type():
-    """
-    'light' or 'dark' -- the theme the app is showing right now -- or None
-    if this Streamlit version can't say (st.context.theme needs 1.46+), or
-    the browser hasn't reported it yet.
-    """
-    try:
-        return st.context.theme.type
-    except Exception:
-        return None
-
-
 def inject_css():
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    # Light-mode contrast rules. If the theme can't be read, fall back to
-    # the browser's own light/dark setting, which is what Streamlit follows
-    # by default ("Use system setting").
-    theme = _theme_type()
-    if theme == "light":
-        st.markdown(f"<style>{LIGHT_MODE_CSS}</style>", unsafe_allow_html=True)
-    elif theme is None:
-        st.markdown(f"<style>@media (prefers-color-scheme: light) {{{LIGHT_MODE_CSS}}}</style>",
-                    unsafe_allow_html=True)
 
 
 def render_header():
