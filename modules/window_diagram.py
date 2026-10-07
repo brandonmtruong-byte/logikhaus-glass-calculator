@@ -120,7 +120,7 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
                         swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                         tilt=False, split=False, swing_2=False, handle_side_2='left',
                         tilt_2=False, tilt_only=False, tilt_only_2=False,
-                        slide=False, slide_side='left'):
+                        slide=False, slide_side='left', split_left_mm=None):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
@@ -161,11 +161,15 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         the side-hung lines (pointing to handle_side).
     slide_side: 'left' or 'right' -- which half slides. Only used when
         slide is True.
+    split_left_mm: width of the LEFT panel in mm, for split and sliding
+        windows; the right panel gets the rest. None (the default) splits
+        exactly in half. Must be between 0 and width_mm (exclusive).
     """
     doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
                              _pane_options(swing, handle_side, tilt, tilt_only, split,
                                            swing_2, handle_side_2, tilt_2, tilt_only_2,
-                                           slide, slide_side))
+                                           slide, slide_side),
+                             split_left_mm)
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -176,7 +180,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
                             swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                             tilt=False, split=False, swing_2=False, handle_side_2='left',
                             tilt_2=False, tilt_only=False, tilt_only_2=False,
-                            slide=False, slide_side='left',
+                            slide=False, slide_side='left', split_left_mm=None,
                             paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
@@ -195,7 +199,8 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
                                  _pane_options(swing, handle_side, tilt, tilt_only, split,
                                                swing_2, handle_side_2, tilt_2, tilt_only_2,
-                                           slide, slide_side))
+                                               slide, slide_side),
+                                 split_left_mm)
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -256,7 +261,8 @@ def _format_mm(value):
     return f'{value:g}'
 
 
-def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm, panes):
+def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm, panes,
+                       split_left_mm=None):
     """
     Draw the diagram onto a new one-page fitz.Document and return it.
     Shared by draw_window_diagram() (PNG preview) and
@@ -269,6 +275,9 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError(f"width_mm and height_mm must both be positive (got {width_mm}, {height_mm})")
     split = len(panes) == 2
+    if split and split_left_mm is not None and not 0 < split_left_mm < width_mm:
+        raise ValueError(f"split_left_mm must be between 0 and width_mm "
+                         f"(got {split_left_mm} for width {width_mm})")
 
     scale = min(MAX_DRAWING_W / width_mm, MAX_DRAWING_H / height_mm)
     draw_w = width_mm * scale
@@ -284,7 +293,12 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
 
     x0, y0 = MARGIN_LEFT, MARGIN_TOP
     x1, y1 = x0 + draw_w, y0 + draw_h
-    xm = (x0 + x1) / 2                   # centre line (the mullion, when split)
+    # The mullion's centre line (when split): halfway, or at the left
+    # panel's width if one was given.
+    if split_left_mm is None:
+        xm = (x0 + x1) / 2
+    else:
+        xm = x0 + split_left_mm * scale
     outer = fitz.Rect(x0, y0, x1, y1)
 
     shorter_side_mm = min(width_mm, height_mm)
@@ -344,8 +358,9 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     dim_color = (0.15, 0.15, 0.15)
     dim_y = y1 + DIM_GAP
     if split:
+        left_mm = width_mm / 2 if split_left_mm is None else split_left_mm
         _draw_width_dimension(page, [x0, xm, x1], dim_y,
-                              [_format_mm(width_mm / 2)] * 2, dim_color)
+                              [_format_mm(left_mm), _format_mm(width_mm - left_mm)], dim_color)
         dim_y += TOTAL_DIM_GAP
     _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
 
