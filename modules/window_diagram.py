@@ -117,10 +117,11 @@ SLIDE_ARROW_HEAD_RATIO  = 0.13    # arrowhead length, as a fraction of the arrow
 SLIDE_ARROW_HEAD_MAX_PT = 14
 SLIDE_ARROW_COLOR = (0.25, 0.25, 0.25)
 
-# French doors: how far each door reaches past the middle line, in real mm
-# (scaled with the window like the sash parts). The door with the handle
-# is drawn last, so its overlap sits on top, as in the reference drawings.
-FRENCH_OVERLAP_MM = 25
+# French doors: at the middle, the door WITH the handle shows its full
+# meeting stile, and this fraction of the other door's meeting stile is
+# hidden behind it. 0.5 = half hidden, so the two visible stiles are in a
+# 1 : 2 ratio (other door : handle door).
+FRENCH_HIDDEN_RATIO = 0.5
 SLIDE_ARROW_WIDTH = 0.8
 
 
@@ -485,39 +486,99 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     return doc
 
 
+def _sash_layout(outer, scale, frame_thickness, sash_margin_mm, mullion_side, transom_below,
+                 meeting_side, part_scale_override=None, stile_override=None):
+    """
+    Sizes for a sash in `outer` (arguments as for _draw_sash()). Returns
+    (part_scale, sash_rect, stile, top_rail, bottom_rail), all in points.
+    Shared by _draw_sash() and _draw_french_doors(), so the French doors
+    can size their overlap from exactly the stile _draw_sash() will draw.
+    """
+    # Points per mm for the sash parts: the window's own scale, times the
+    # shrink factor for thin/small windows (see SASH_REFERENCE_SIZE_MM).
+    if part_scale_override is not None:
+        part_scale = part_scale_override
+    else:
+        shorter_side_mm = min(outer.width, outer.height) / scale
+        part_scale = scale * min(1.0, shorter_side_mm / SASH_REFERENCE_SIZE_MM)
+
+    # Capped against the fixed frame's thickness (see
+    # SASH_MARGIN_MAX_FRAME_RATIO), which matters mostly on small windows.
+    inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
+    left_inset  = inset / 2 if mullion_side in ('left', 'both') else inset
+    right_inset = inset / 2 if mullion_side in ('right', 'both') else inset
+    if meeting_side == 'left':
+        left_inset = 0
+    elif meeting_side == 'right':
+        right_inset = 0
+    # Above a transom, the sash also leaves only half its margin at the
+    # bottom, the same way it does next to a mullion.
+    bottom_inset = inset / 2 if transom_below else inset
+    sash = fitz.Rect(outer.x0 + left_inset, outer.y0 + inset,
+                     outer.x1 - right_inset, outer.y1 - bottom_inset)
+
+    max_across = sash.width * SASH_MEMBER_MAX_RATIO
+    max_down   = sash.height * SASH_MEMBER_MAX_RATIO
+    stile       = min(SASH_STILE_MM * part_scale, max_across)
+    if stile_override is not None:
+        stile = stile_override
+    top_rail    = min(SASH_TOP_RAIL_MM * part_scale, max_down)
+    bottom_rail = min(SASH_BOTTOM_RAIL_MM * part_scale, max_down)
+    return part_scale, sash, stile, top_rail, bottom_rail
+
+
 def _draw_french_doors(page, outer, scale, frame_thickness, frame_color, glass_color,
                        handle_side, sash_margin_mm, mullion_side, transom_below):
     """
-    A pair of French doors filling `outer` (one panel): two doors each
-    sized to exactly half the width, meeting in the middle with no mullion
-    and overlapping slightly there (FRENCH_OVERLAP_MM). Each is
-    hinged on its OUTER side, so both sets of opening lines point to the
-    middle. Only the door on handle_side ('left' / 'right') gets a handle,
-    at the meeting edge.
+    A pair of French doors filling `outer` (one panel), meeting in the
+    middle with no mullion. Each is hinged on its OUTER side, so both sets
+    of opening lines point to the middle. Only the door on handle_side
+    ('left' / 'right') gets a handle, at the meeting edge.
+
+    At the middle, the door with the handle is exactly its half and shows
+    its full meeting stile. The other door reaches past the middle,
+    underneath it, so FRENCH_HIDDEN_RATIO of its meeting stile is hidden:
+    with 0.5, the visible stiles are in a 1 : 2 ratio. Both doors use the
+    same part sizes (worked out from the handle door's half).
 
     mullion_side / transom_below: as for _draw_sash(), for the panel as a
     whole -- each door takes the side(s) of these that it touches.
     """
     mid = (outer.x0 + outer.x1) / 2
-    # Each door reaches FRENCH_OVERLAP_MM past the middle, shrunk on small
-    # doors the same way as the sash parts (see SASH_REFERENCE_SIZE_MM).
-    door_short_mm = min(outer.width / 2, outer.height) / scale
-    overlap = FRENCH_OVERLAP_MM * scale * min(1.0, door_short_mm / SASH_REFERENCE_SIZE_MM)
-    doors = {'left': fitz.Rect(outer.x0, outer.y0, mid + overlap, outer.y1),
-             'right': fitz.Rect(mid - overlap, outer.y0, outer.x1, outer.y1)}
-    # The door without the handle first, so the active door is on top.
+    halves = {'left': fitz.Rect(outer.x0, outer.y0, mid, outer.y1),
+              'right': fitz.Rect(mid, outer.y0, outer.x1, outer.y1)}
     passive = 'left' if handle_side == 'right' else 'right'
-    for door_side in (passive, handle_side):
-        rect = doors[door_side]
-        # Keep a mullion only on this door's own outer side.
-        door_mullion = mullion_side if mullion_side in (door_side, None) else None
+
+    def door_mullion(door_side):
+        """Keep a mullion only on this door's own outer side."""
         if mullion_side == 'both':
-            door_mullion = door_side
-        meeting = 'right' if door_side == 'left' else 'left'
+            return door_side
+        return mullion_side if mullion_side == door_side else None
+
+    def meeting(door_side):
+        return 'right' if door_side == 'left' else 'left'
+
+    # Part sizes from the handle door's exact half.
+    part_scale, _, stile, _, _ = _sash_layout(
+        halves[handle_side], scale, frame_thickness, sash_margin_mm,
+        door_mullion(handle_side), transom_below, meeting(handle_side))
+
+    # The other door reaches under the handle door by the hidden part of
+    # its meeting stile.
+    reach = stile * FRENCH_HIDDEN_RATIO
+    passive_rect = fitz.Rect(halves[passive])
+    if passive == 'left':
+        passive_rect.x1 += reach
+    else:
+        passive_rect.x0 -= reach
+
+    # The other door first, so the handle door is drawn on top.
+    for door_side, rect in ((passive, passive_rect), (handle_side, halves[handle_side])):
         _draw_sash(page, rect, scale, frame_thickness, frame_color, glass_color,
-                   meeting, sash_margin_mm, False, door_mullion,
-                   transom_below=transom_below, meeting_side=meeting,
-                   draw_handle=door_side == handle_side)
+                   meeting(door_side), sash_margin_mm, False, door_mullion(door_side),
+                   transom_below=transom_below, meeting_side=meeting(door_side),
+                   draw_handle=door_side == handle_side,
+                   part_scale_override=part_scale, stile_override=stile)
 
 
 def _transom_y(pane, y0, scale):
@@ -555,7 +616,8 @@ def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
                sash_margin_mm, tilt, mullion_side=None, tilt_only=False, slide_dir=None,
-               transom_below=False, meeting_side=None, draw_handle=True):
+               transom_below=False, meeting_side=None, draw_handle=True,
+               part_scale_override=None, stile_override=None):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -578,6 +640,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     meeting_side: 'left' / 'right' for one door of a French pair -- the
         side where it meets the other door, with no margin at all.
     draw_handle: False leaves the handle off (the passive French door).
+    part_scale_override / stile_override: use these instead of working
+        them out from `outer` -- lets the two French doors share exactly
+        the same part sizes even though one is drawn wider than the other.
 
     Parts are drawn at their real mm sizes on panes whose shorter side
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
@@ -589,31 +654,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     space inside. The handle is a short thick bar centred on the glass
     edge on the handle side.
     """
-    # Points per mm for the sash parts: the window's own scale, times the
-    # shrink factor for thin/small windows (see SASH_REFERENCE_SIZE_MM).
-    shorter_side_mm = min(outer.width, outer.height) / scale
-    part_scale = scale * min(1.0, shorter_side_mm / SASH_REFERENCE_SIZE_MM)
-
-    # Capped against the fixed frame's thickness (see
-    # SASH_MARGIN_MAX_FRAME_RATIO), which matters mostly on small windows.
-    inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
-    left_inset  = inset / 2 if mullion_side in ('left', 'both') else inset
-    right_inset = inset / 2 if mullion_side in ('right', 'both') else inset
-    if meeting_side == 'left':
-        left_inset = 0
-    elif meeting_side == 'right':
-        right_inset = 0
-    # Above a transom, the sash also leaves only half its margin at the
-    # bottom, the same way it does next to a mullion.
-    bottom_inset = inset / 2 if transom_below else inset
-    sash = fitz.Rect(outer.x0 + left_inset, outer.y0 + inset,
-                     outer.x1 - right_inset, outer.y1 - bottom_inset)
-
-    max_across = sash.width * SASH_MEMBER_MAX_RATIO
-    max_down   = sash.height * SASH_MEMBER_MAX_RATIO
-    stile       = min(SASH_STILE_MM * part_scale, max_across)
-    top_rail    = min(SASH_TOP_RAIL_MM * part_scale, max_down)
-    bottom_rail = min(SASH_BOTTOM_RAIL_MM * part_scale, max_down)
+    part_scale, sash, stile, top_rail, bottom_rail = _sash_layout(
+        outer, scale, frame_thickness, sash_margin_mm, mullion_side, transom_below,
+        meeting_side, part_scale_override, stile_override)
 
     glass = fitz.Rect(sash.x0 + stile, sash.y0 + top_rail,
                       sash.x1 - stile, sash.y1 - bottom_rail)
