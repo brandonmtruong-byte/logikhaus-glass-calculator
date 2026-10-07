@@ -82,7 +82,7 @@ with st.sidebar:
     wait_s = st.session_state.pop("data_refresh_wait", None)
     if wait_s:
         st.toast(f"Data was refreshed less than a minute ago - try again in {wait_s} s. "
-                 "(Google limits how often the sheets can be read.)", icon="⏳")
+                 "(Google limits how often the sheets can be read.)")
 
 # ── View switcher ────────────────────────────────────────────────────────
 # Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
@@ -388,7 +388,7 @@ if st.session_state.active_view == 'PDF Modifier':
             st.rerun()
     else:
         st.markdown(
-            f'<div class="status-box">⏳ Hardware data is loading in the background '
+            f'<div class="status-box">Hardware data is loading in the background '
             f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
             unsafe_allow_html=True
         )
