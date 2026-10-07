@@ -268,13 +268,15 @@ def _apply_to_diagram(w, h, swing, tilt):
     st.session_state["window_diagram_width"] = int(w)
     st.session_state["window_diagram_height"] = int(h)
     panel_type = "Tilt & turn" if (swing and tilt) else "Side-hung" if swing else "Fixed"
-    panels = st.session_state.setdefault("window_diagram_panels", [
-        {"type": "Fixed", "handle_side": "Right", "slide_tilt": "None"},
-        {"type": "Fixed", "handle_side": "Left", "slide_tilt": "None"},
-    ])
-    panels[0]["type"] = panel_type
+    # app.py stores panels by position ("left" / "middle" / "right"); a
+    # single window is just the "left" panel.
+    panels = st.session_state.get("window_diagram_panels")
+    if not isinstance(panels, dict):
+        panels = st.session_state["window_diagram_panels"] = {}
+    panels.setdefault("left", {"type": "Fixed", "handle_side": "Right", "slide_tilt": "None"})
+    panels["left"]["type"] = panel_type
     st.session_state["window_diagram_panel_count"] = 1
-    st.session_state["window_diagram_type_0"] = panel_type
+    st.session_state["window_diagram_type_left"] = panel_type
 
 
 def _strip_label(txt, *labels):

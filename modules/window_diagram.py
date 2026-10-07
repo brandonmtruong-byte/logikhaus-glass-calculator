@@ -120,7 +120,8 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
                         swing=False, handle_side='right', sash_margin_mm=SASH_MARGIN_MM,
                         tilt=False, split=False, swing_2=False, handle_side_2='left',
                         tilt_2=False, tilt_only=False, tilt_only_2=False,
-                        slide=False, slide_side='left', split_left_mm=None):
+                        slide=False, slide_side='left', split_left_mm=None,
+                        panels=None, panel_widths_mm=None):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
@@ -164,12 +165,21 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
     split_left_mm: width of the LEFT panel in mm, for split and sliding
         windows; the right panel gets the rest. None (the default) splits
         exactly in half. Must be between 0 and width_mm (exclusive).
+    panels: a list of panel dicts, left to right, for a row of ANY number
+        of panels (e.g. 3). Each dict has 'swing', 'handle_side', 'tilt'
+        and 'tilt_only', with the same meanings as the single-panel
+        arguments above. When given, it replaces swing / handle_side /
+        tilt / tilt_only / split and all the *_2 options. Not used with
+        slide (sliding is always two panels).
+    panel_widths_mm: each panel's width in mm, left to right, matching
+        panels; they must add up to width_mm. None (the default) makes
+        the panels equal.
     """
     doc = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
                              _pane_options(swing, handle_side, tilt, tilt_only, split,
                                            swing_2, handle_side_2, tilt_2, tilt_only_2,
-                                           slide, slide_side),
-                             split_left_mm)
+                                           slide, slide_side, panels),
+                             split_left_mm, panel_widths_mm)
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -181,6 +191,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
                             tilt=False, split=False, swing_2=False, handle_side_2='left',
                             tilt_2=False, tilt_only=False, tilt_only_2=False,
                             slide=False, slide_side='left', split_left_mm=None,
+                            panels=None, panel_widths_mm=None,
                             paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
@@ -199,8 +210,8 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
     diagram = _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm,
                                  _pane_options(swing, handle_side, tilt, tilt_only, split,
                                                swing_2, handle_side_2, tilt_2, tilt_only_2,
-                                               slide, slide_side),
-                                 split_left_mm)
+                                               slide, slide_side, panels),
+                                 split_left_mm, panel_widths_mm)
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -228,7 +239,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
 
 def _pane_options(swing, handle_side, tilt, tilt_only, split,
                   swing_2, handle_side_2, tilt_2, tilt_only_2,
-                  slide=False, slide_side='left'):
+                  slide=False, slide_side='left', panels=None):
     """
     Turn the public arguments into one options dict per pane (one pane,
     or two side by side when split or sliding), validating the sides.
@@ -244,6 +255,13 @@ def _pane_options(swing, handle_side, tilt, tilt_only, split,
         fixed = dict(swing=False, handle_side='left', tilt=False, tilt_only=False,
                      slide_dir=None)
         panes = [slider, fixed] if slide_side == 'left' else [fixed, slider]
+    elif panels is not None:
+        if not panels:
+            raise ValueError("panels must contain at least one panel")
+        panes = [dict(swing=bool(p.get('swing')), handle_side=p.get('handle_side', 'right'),
+                      tilt=bool(p.get('tilt')), tilt_only=bool(p.get('tilt_only')),
+                      slide_dir=None)
+                 for p in panels]
     else:
         panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only,
                       slide_dir=None)]
@@ -262,22 +280,30 @@ def _format_mm(value):
 
 
 def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm, panes,
-                       split_left_mm=None):
+                       split_left_mm=None, panel_widths_mm=None):
     """
     Draw the diagram onto a new one-page fitz.Document and return it.
     Shared by draw_window_diagram() (PNG preview) and
     draw_window_diagram_pdf() (PDF), so both always show exactly the
-    same drawing. panes is the list from _pane_options(): one dict for a
-    single window, two for a split one. Other arguments as documented on
+    same drawing. panes is the list from _pane_options(): one dict per
+    panel, left to right (one for a single window). Other arguments as documented on
     draw_window_diagram(). The caller is responsible for closing the
     returned document.
     """
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError(f"width_mm and height_mm must both be positive (got {width_mm}, {height_mm})")
-    split = len(panes) == 2
-    if split and split_left_mm is not None and not 0 < split_left_mm < width_mm:
+    count = len(panes)
+    split = count > 1
+    if count == 2 and split_left_mm is not None and not 0 < split_left_mm < width_mm:
         raise ValueError(f"split_left_mm must be between 0 and width_mm "
                          f"(got {split_left_mm} for width {width_mm})")
+    if panel_widths_mm is not None:
+        if len(panel_widths_mm) != count:
+            raise ValueError(f"panel_widths_mm has {len(panel_widths_mm)} widths "
+                             f"for {count} panels")
+        if any(w <= 0 for w in panel_widths_mm) or abs(sum(panel_widths_mm) - width_mm) > 0.01:
+            raise ValueError(f"panel_widths_mm must all be positive and add up to "
+                             f"width_mm ({width_mm}), got {panel_widths_mm}")
 
     scale = min(MAX_DRAWING_W / width_mm, MAX_DRAWING_H / height_mm)
     draw_w = width_mm * scale
@@ -293,28 +319,43 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
 
     x0, y0 = MARGIN_LEFT, MARGIN_TOP
     x1, y1 = x0 + draw_w, y0 + draw_h
-    # The mullion's centre line (when split): halfway, or at the left
-    # panel's width if one was given.
-    if split_left_mm is None:
-        xm = (x0 + x1) / 2
+    # Panel boundaries, left to right: xs[0] = x0 ... xs[-1] = x1, with a
+    # mullion centred on every boundary in between. widths_mm are the
+    # panels' widths for the dimension labels.
+    if panel_widths_mm is not None:
+        widths_mm = list(panel_widths_mm)
+        xs = [x0]
+        for w in widths_mm[:-1]:
+            xs.append(xs[-1] + w * scale)
+        xs.append(x1)
+    elif count == 2 and split_left_mm is not None:
+        widths_mm = [split_left_mm, width_mm - split_left_mm]
+        xs = [x0, x0 + split_left_mm * scale, x1]
+    elif count == 2:
+        widths_mm = [width_mm / 2, width_mm / 2]
+        xs = [x0, (x0 + x1) / 2, x1]
     else:
-        xm = x0 + split_left_mm * scale
+        widths_mm = [width_mm / count] * count
+        xs = [x0 + draw_w * i / count for i in range(count)] + [x1]
+    mullions = xs[1:-1]
     outer = fitz.Rect(x0, y0, x1, y1)
 
     shorter_side_mm = min(width_mm, height_mm)
     frame_thickness = (FRAME_THICKNESS_MM * scale
                        * min(1.0, shorter_side_mm / FRAME_REFERENCE_SIZE_MM))
-    # The mullion is the same thickness as the frame, centred on xm.
+    # Each mullion is the same thickness as the frame, centred on its
+    # boundary.
     mullion_half = frame_thickness / 2
 
     page.draw_rect(outer, color=(0.2, 0.2, 0.2), fill=frame_color, width=1.2)
     if split:
-        left_glass  = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
-                                xm - mullion_half, y1 - frame_thickness)
-        right_glass = fitz.Rect(xm + mullion_half, y0 + frame_thickness,
-                                x1 - frame_thickness, y1 - frame_thickness)
-        page.draw_rect(left_glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
-        page.draw_rect(right_glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+        # Fixed glass in each panel: inset by the frame on the outer
+        # edges, and by half a mullion on edges shared with a neighbour.
+        for i in range(count):
+            gx0 = x0 + frame_thickness if i == 0 else xs[i] + mullion_half
+            gx1 = x1 - frame_thickness if i == count - 1 else xs[i + 1] - mullion_half
+            glass = fitz.Rect(gx0, y0 + frame_thickness, gx1, y1 - frame_thickness)
+            page.draw_rect(glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
     else:
         inner = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
                           x1 - frame_thickness, y1 - frame_thickness)
@@ -331,20 +372,23 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     page.draw_line((x1 - frame_thickness, top_rail_y), (x1, top_rail_y), color=seam_color, width=1)
     page.draw_line((x0, bottom_rail_y), (x0 + frame_thickness, bottom_rail_y), color=seam_color, width=1)
     page.draw_line((x1 - frame_thickness, bottom_rail_y), (x1, bottom_rail_y), color=seam_color, width=1)
-    if split:
-        # The mullion also fits between the rails: continue the rails'
+    for xm in mullions:
+        # Each mullion also fits between the rails: continue the rails'
         # inner edges across it, the same way as at the corners.
         page.draw_line((xm - mullion_half, top_rail_y), (xm + mullion_half, top_rail_y),
                        color=seam_color, width=1)
         page.draw_line((xm - mullion_half, bottom_rail_y), (xm + mullion_half, bottom_rail_y),
                        color=seam_color, width=1)
 
-    # Sashes. A split window's panes are each half the outer frame; the
-    # sash leaves only half its usual margin on the mullion side, so the
-    # two sashes sit close together over the mullion.
+    # Sashes. Each panel's sash leaves only half its usual margin on any
+    # side that faces a mullion, so neighbouring sashes sit close together
+    # over the mullion between them.
     if split:
-        pane_layout = [(fitz.Rect(x0, y0, xm, y1), 'right'),
-                       (fitz.Rect(xm, y0, x1, y1), 'left')]
+        pane_layout = []
+        for i in range(count):
+            first, last = i == 0, i == count - 1
+            side = 'right' if first else 'left' if last else 'both'
+            pane_layout.append((fitz.Rect(xs[i], y0, xs[i + 1], y1), side))
     else:
         pane_layout = [(outer, None)]
     for options, (pane_rect, mullion_side) in zip(panes, pane_layout):
@@ -358,9 +402,7 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     dim_color = (0.15, 0.15, 0.15)
     dim_y = y1 + DIM_GAP
     if split:
-        left_mm = width_mm / 2 if split_left_mm is None else split_left_mm
-        _draw_width_dimension(page, [x0, xm, x1], dim_y,
-                              [_format_mm(left_mm), _format_mm(width_mm - left_mm)], dim_color)
+        _draw_width_dimension(page, xs, dim_y, [_format_mm(w) for w in widths_mm], dim_color)
         dim_y += TOTAL_DIM_GAP
     _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
 
@@ -400,9 +442,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
         outer frame, or one half of it for a split window.
     scale: points per mm, the same factor used for the window itself.
     frame_thickness: the fixed frame's thickness in points, as drawn.
-    mullion_side: for a split window's pane, 'left' or 'right' -- the
-        side facing the mullion, where the sash margin is halved. None
-        for a single window.
+    mullion_side: for a panel in a row, the side(s) facing a mullion,
+        where the sash margin is halved: 'left', 'right', or 'both' (a
+        middle panel). None for a single window.
     tilt_only: True puts the handle in the middle of the top (as a short
         vertical bar across the glass edge) and draws only the tilt lines;
         handle_side and tilt are then ignored.
@@ -429,8 +471,8 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     # Capped against the fixed frame's thickness (see
     # SASH_MARGIN_MAX_FRAME_RATIO), which matters mostly on small windows.
     inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
-    left_inset  = inset / 2 if mullion_side == 'left' else inset
-    right_inset = inset / 2 if mullion_side == 'right' else inset
+    left_inset  = inset / 2 if mullion_side in ('left', 'both') else inset
+    right_inset = inset / 2 if mullion_side in ('right', 'both') else inset
     sash = fitz.Rect(outer.x0 + left_inset, outer.y0 + inset,
                      outer.x1 - right_inset, outer.y1 - inset)
 

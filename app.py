@@ -828,43 +828,47 @@ elif st.session_state.active_view == 'Quote Estimator':
     col_options, col_diagram = st.columns(2, gap="medium")
 
     # ── Panel-based options ─────────────────────────────────────────────
-    # The window is a row of panels (currently 1 or 2), and each panel has
-    # ONE type. Only the selected panel's options are shown at a time, and
-    # each type shows only the options that apply to it.
+    # The window is a row of 1-3 panels, and each panel has ONE type. Each
+    # type shows only the options that apply to it. With 2 or 3 panels,
+    # each panel's options are in its own tab.
     #
-    # Each panel's settings live in st.session_state["window_diagram_panels"]
-    # rather than only in widget state: Streamlit forgets the state of any
-    # widget that isn't drawn on a run, and only one panel's widgets are
-    # drawn at a time, so the other panel's settings would otherwise be lost.
+    # Panels are stored by POSITION ("left" / "middle" / "right") in
+    # st.session_state["window_diagram_panels"], not only in widget state:
+    # Streamlit forgets the state of any widget that isn't drawn on a run
+    # (e.g. the right panel's while showing 1 panel), and storing by
+    # position means switching between 2 and 3 panels never moves one
+    # panel's settings onto another.
     WINDOW_PANEL_TYPES = ["Fixed", "Side-hung", "Tilt & turn", "Tilt only", "Sliding"]
     WINDOW_SLIDE_TILT = ["None", "Tilt", "Tilt & turn"]
-    WINDOW_PANEL_NAMES = ["Left", "Right"]
+    WINDOW_SIDES = ["Left", "Right"]
+    WINDOW_POSITIONS = {1: ["left"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
 
-    panels = st.session_state.setdefault("window_diagram_panels", [
-        # Default handles face each other, so a pair meets in the middle.
-        {"type": "Fixed", "handle_side": "Right", "slide_tilt": "None"},
-        {"type": "Fixed", "handle_side": "Left", "slide_tilt": "None"},
-    ])
+    if not isinstance(st.session_state.get("window_diagram_panels"), dict):
+        st.session_state["window_diagram_panels"] = {}
+    panels = st.session_state["window_diagram_panels"]
+    # Default handles face the middle, so neighbouring openers meet there.
+    for _pos, _handle in (("left", "Right"), ("middle", "Right"), ("right", "Left")):
+        panels.setdefault(_pos, {"type": "Fixed", "handle_side": _handle, "slide_tilt": "None"})
 
-    def window_panel_controls(index, panel_count):
-        """Type + the options for that type, for panel `index` (0 = left)."""
-        panel = panels[index]
-        type_key = f"window_diagram_type_{index}"
-        # The other panel's CURRENT type: its widget value is already
-        # updated in session state at the start of the run, even before
-        # its tab is drawn, so this is never one change behind.
-        other_index = 1 - index
-        other_type = st.session_state.get(
-            f"window_diagram_type_{other_index}", panels[other_index]["type"]
-        )
+    def window_panel_controls(pos, positions):
+        """Type + the options for that type, for the panel at `pos`."""
+        panel = panels[pos]
+        type_key = f"window_diagram_type_{pos}"
+        other = None
+        if len(positions) == 2:
+            other = positions[1 - positions.index(pos)]
+            # The other panel's CURRENT type: its widget value is already
+            # updated in session state at the start of the run, even before
+            # its tab is drawn, so this is never one change behind.
+            other_type = st.session_state.get(f"window_diagram_type_{other}", panels[other]["type"])
 
-        if panel_count == 2 and other_type == "Sliding":
+        if other is not None and other_type == "Sliding":
             # The other panel slides over this one, so this one is fixed.
             allowed = ["Fixed"]
-        elif panel_count == 2:
+        elif len(positions) == 2:
             allowed = WINDOW_PANEL_TYPES
         else:
-            # Sliding needs two panels: one slides, the other is fixed.
+            # Sliding is a two-panel window (one slides, the other is fixed).
             allowed = [t for t in WINDOW_PANEL_TYPES if t != "Sliding"]
 
         if panel["type"] not in allowed:
@@ -883,8 +887,8 @@ elif st.session_state.active_view == 'Quote Estimator':
 
         show_handle = panel["type"] in ("Side-hung", "Tilt & turn")
         if panel["type"] == "Sliding":
-            st.caption(f"Slides towards the {WINDOW_PANEL_NAMES[other_index].lower()} panel.")
-            tilt_key = f"window_diagram_slide_tilt_{index}"
+            st.caption(f"Slides towards the {other} panel.")
+            tilt_key = f"window_diagram_slide_tilt_{pos}"
             if st.session_state.get(tilt_key) not in WINDOW_SLIDE_TILT:
                 st.session_state[tilt_key] = panel["slide_tilt"]
             panel["slide_tilt"] = st.radio(
@@ -893,27 +897,35 @@ elif st.session_state.active_view == 'Quote Estimator':
             # The handle side sets which way the side-hung lines point.
             show_handle = panel["slide_tilt"] == "Tilt & turn"
         if show_handle:
-            handle_key = f"window_diagram_handle_side_{index}"
-            if st.session_state.get(handle_key) not in WINDOW_PANEL_NAMES:
+            handle_key = f"window_diagram_handle_side_{pos}"
+            if st.session_state.get(handle_key) not in WINDOW_SIDES:
                 st.session_state[handle_key] = panel["handle_side"]
             panel["handle_side"] = st.radio(
-                "Handle side", WINDOW_PANEL_NAMES, horizontal=True, key=handle_key,
+                "Handle side", WINDOW_SIDES, horizontal=True, key=handle_key,
             )
 
-    # Panel widths (2 panels): each tab has a width box. Only the LEFT
-    # width is stored (None = half); the right is always "overall width
-    # minus left", so the two always add up to the overall width. Editing
-    # either box updates the stored left width through these callbacks,
-    # which run before the script, so the other box shows the new value.
-    def _window_left_width_changed():
+    # Panel widths. Only the widths that can be typed in are stored (None
+    # = default); the rest is always "overall width minus those", so the
+    # panels always add up to the overall width.
+    #   2 panels: left is stored (default half); right = the rest. Both
+    #             boxes are editable and update each other.
+    #   3 panels: left and right are stored (default thirds); the middle
+    #             takes up whatever is left and isn't editable.
+    # These callbacks run before the script, so the boxes they affect show
+    # the new value straight away.
+    def _window_two_left_changed():
         st.session_state["window_diagram_split_left_mm"] = \
-            st.session_state["window_diagram_panel_width_0"]
+            st.session_state["window_diagram_panel_width_left"]
 
-    def _window_right_width_changed():
+    def _window_two_right_changed():
         st.session_state["window_diagram_split_left_mm"] = (
             st.session_state["window_diagram_width"]
-            - st.session_state["window_diagram_panel_width_1"]
+            - st.session_state["window_diagram_panel_width_right"]
         )
+
+    def _window_three_side_changed(pos):
+        st.session_state[f"window_diagram_three_{pos}_mm"] = \
+            st.session_state[f"window_diagram_panel_width_{pos}"]
 
     def window_opening(panel):
         """(swing, tilt, tilt_only) drawing options for a non-sliding panel."""
@@ -943,75 +955,101 @@ elif st.session_state.active_view == 'Quote Estimator':
 
         render_eyebrow("Panels")
         panel_count = st.radio(
-            "Number of panels", [1, 2], horizontal=True,
+            "Number of panels", [1, 2, 3], horizontal=True,
             key="window_diagram_panel_count", label_visibility="collapsed",
         )
-        # A window under 2 mm wide can't be split into two whole-mm panels.
-        if window_width_mm < 2:
-            panel_count = 1
+        # Every panel needs at least 1 mm.
+        panel_count = min(panel_count, max(int(window_width_mm), 1))
+        positions = WINDOW_POSITIONS[panel_count]
 
         render_eyebrow("Panel options")
-        window_left_mm = None
-        if panel_count == 2:
-            # Left panel width: the one set in a width box, or half by
-            # default. Also back to half if the overall width has shrunk so
-            # far that the set width no longer leaves room for the right panel.
-            stored_left = st.session_state.get("window_diagram_split_left_mm")
-            if stored_left is None or not 1 <= stored_left <= window_width_mm - 1:
-                stored_left = None
-                st.session_state["window_diagram_split_left_mm"] = None
-            window_left_mm = window_width_mm // 2 if stored_left is None else int(stored_left)
-            st.session_state["window_diagram_panel_width_0"] = window_left_mm
-            st.session_state["window_diagram_panel_width_1"] = window_width_mm - window_left_mm
-
-            # Tabs: both panels' options exist at once; the tab picks which
-            # one is showing.
-            tab_left, tab_right = st.tabs(WINDOW_PANEL_NAMES)
-            with tab_left:
-                st.number_input(
-                    "Width (mm)", min_value=1, max_value=window_width_mm - 1, step=10,
-                    key="window_diagram_panel_width_0",
-                    on_change=_window_left_width_changed,
-                )
-                window_panel_controls(0, panel_count)
-            with tab_right:
-                st.number_input(
-                    "Width (mm)", min_value=1, max_value=window_width_mm - 1, step=10,
-                    key="window_diagram_panel_width_1",
-                    on_change=_window_right_width_changed,
-                )
-                window_panel_controls(1, panel_count)
+        window_widths_mm = None
+        if panel_count == 1:
+            window_panel_controls("left", positions)
         else:
-            window_panel_controls(0, panel_count)
+            if panel_count == 2:
+                # Left width: the one set in a width box, or half. Back to
+                # half if the overall width has shrunk too far for it.
+                left_mm = st.session_state.get("window_diagram_split_left_mm")
+                if left_mm is None or not 1 <= left_mm <= window_width_mm - 1:
+                    left_mm = None
+                    st.session_state["window_diagram_split_left_mm"] = None
+                left_mm = window_width_mm // 2 if left_mm is None else int(left_mm)
+                window_widths_mm = {"left": left_mm, "right": window_width_mm - left_mm}
+            else:
+                # Side widths: the ones set in the width boxes, or thirds.
+                # Both back to thirds if the overall width has shrunk too far
+                # to leave the middle at least 1 mm.
+                third = window_width_mm // 3
+                side_mm = {pos: st.session_state.get(f"window_diagram_three_{pos}_mm")
+                           for pos in ("left", "right")}
+                side_mm = {pos: third if mm is None else int(mm) for pos, mm in side_mm.items()}
+                if (min(side_mm.values()) < 1
+                        or side_mm["left"] + side_mm["right"] > window_width_mm - 1):
+                    side_mm = {"left": third, "right": third}
+                    st.session_state["window_diagram_three_left_mm"] = None
+                    st.session_state["window_diagram_three_right_mm"] = None
+                window_widths_mm = {
+                    "left": side_mm["left"],
+                    "middle": window_width_mm - side_mm["left"] - side_mm["right"],
+                    "right": side_mm["right"],
+                }
+            for pos, mm in window_widths_mm.items():
+                st.session_state[f"window_diagram_panel_width_{pos}"] = mm
+
+            # Tabs: all panels' options exist at once; the tab picks which
+            # one is showing.
+            tabs = st.tabs([pos.capitalize() for pos in positions])
+            for pos, tab in zip(positions, tabs):
+                with tab:
+                    if panel_count == 2:
+                        st.number_input(
+                            "Width (mm)", min_value=1, max_value=window_width_mm - 1,
+                            step=10, key=f"window_diagram_panel_width_{pos}",
+                            on_change=(_window_two_left_changed if pos == "left"
+                                       else _window_two_right_changed),
+                        )
+                    elif pos == "middle":
+                        st.number_input(
+                            "Width (mm)", step=10, key="window_diagram_panel_width_middle",
+                            disabled=True,
+                            help="The middle panel fills the space between the side panels.",
+                        )
+                    else:
+                        other_side = "right" if pos == "left" else "left"
+                        st.number_input(
+                            "Width (mm)", min_value=1,
+                            # Always leave at least 1 mm for the middle panel.
+                            max_value=window_width_mm - window_widths_mm[other_side] - 1,
+                            step=10, key=f"window_diagram_panel_width_{pos}",
+                            on_change=_window_three_side_changed, args=(pos,),
+                        )
+                    window_panel_controls(pos, positions)
 
     # Turn the panels into the drawing's options.
-    left, right = panels
-    window_split = False
     window_slide = False
-    if panel_count == 2 and "Sliding" in (left["type"], right["type"]):
-        slider = left if left["type"] == "Sliding" else right
+    row = [panels[pos] for pos in positions]
+    if panel_count == 2 and any(p["type"] == "Sliding" for p in row):
+        slider_pos = "left" if panels["left"]["type"] == "Sliding" else "right"
+        slider = panels[slider_pos]
         window_slide = True
         diagram_options = dict(
-            slide=True, slide_side="left" if slider is left else "right",
+            slide=True, slide_side=slider_pos,
             tilt=slider["slide_tilt"] == "Tilt & turn",
             tilt_only=slider["slide_tilt"] == "Tilt",
             handle_side=slider["handle_side"].lower(),
-            split_left_mm=window_left_mm,
+            split_left_mm=window_widths_mm["left"],
         )
     else:
-        swing, tilt, tilt_only = window_opening(left)
-        diagram_options = dict(
-            swing=swing, tilt=tilt, tilt_only=tilt_only,
-            handle_side=left["handle_side"].lower(),
-        )
-        if panel_count == 2:
-            window_split = True
-            swing_2, tilt_2, tilt_only_2 = window_opening(right)
-            diagram_options.update(
-                split=True, swing_2=swing_2, tilt_2=tilt_2, tilt_only_2=tilt_only_2,
-                handle_side_2=right["handle_side"].lower(),
-                split_left_mm=window_left_mm,
-            )
+        diagram_options = dict(panels=[], panel_widths_mm=None)
+        for p in row:
+            swing, tilt, tilt_only = window_opening(p)
+            diagram_options["panels"].append(dict(
+                swing=swing, tilt=tilt, tilt_only=tilt_only,
+                handle_side=p["handle_side"].lower(),
+            ))
+        if window_widths_mm is not None:
+            diagram_options["panel_widths_mm"] = [window_widths_mm[pos] for pos in positions]
 
     with col_diagram:
         with st.container(key="window_diagram_panel"):
@@ -1041,8 +1079,9 @@ elif st.session_state.active_view == 'Quote Estimator':
                 "Download PDF",
                 data=diagram_pdf,
                 file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
-                           f"{'_split' if window_split else ''}"
-                           f"{'_sliding' if window_slide else ''}.pdf"),
+                           f"{'_sliding' if window_slide else ''}"
+                           f"{f'_{panel_count}panel' if panel_count > 1 and not window_slide else ''}"
+                           ".pdf"),
                 mime="application/pdf",
                 key="window_diagram_pdf_download",
             )
