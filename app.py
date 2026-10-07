@@ -82,7 +82,7 @@ with st.sidebar:
     wait_s = st.session_state.pop("data_refresh_wait", None)
     if wait_s:
         st.toast(f"Data was refreshed less than a minute ago - try again in {wait_s} s. "
-                 "(Google limits how often the sheets can be read.)")
+                 "(Google limits how often the sheets can be read.)", icon="⏳")
 
 # ── View switcher ────────────────────────────────────────────────────────
 # Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
@@ -388,7 +388,7 @@ if st.session_state.active_view == 'PDF Modifier':
             st.rerun()
     else:
         st.markdown(
-            f'<div class="status-box">Hardware data is loading in the background '
+            f'<div class="status-box">⏳ Hardware data is loading in the background '
             f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
             unsafe_allow_html=True
         )
@@ -977,14 +977,12 @@ elif st.session_state.active_view == 'Quote Estimator':
                 top_mm = window_top_mm(panel, height_mm)
                 st.session_state[f"window_diagram_top_height_{pos}"] = top_mm
                 st.session_state[f"window_diagram_bottom_height_{pos}"] = height_mm - top_mm
-                col_top, col_bottom = st.columns(2)
-                with col_top:
-                    st.number_input(
-                        "Top height (mm)", min_value=1, max_value=height_mm - 1, step=10,
-                        key=f"window_diagram_top_height_{pos}",
-                        on_change=_window_top_changed, args=(pos,),
-                    )
-                with col_bottom:
+                window_mm_input(
+                    "Top height (mm)", f"window_diagram_top_height_{pos}",
+                    WINDOW_SLIDER_MAX_HEIGHT_MM, max_value=height_mm - 1,
+                    on_change=_window_top_changed, args=(pos,),
+                )
+                with st.container(key=f"wdnum_window_diagram_bottom_height_{pos}"):
                     st.number_input(
                         "Bottom height (mm)", step=10, disabled=True,
                         key=f"window_diagram_bottom_height_{pos}",
@@ -1031,6 +1029,48 @@ elif st.session_state.active_view == 'Quote Estimator':
                     french=panel["type"] == "French doors",
                     double_slide=panel["type"] == "Double sliding")
 
+    # ── Size inputs: slider + typeable number ───────────────────────────
+    # Every size here is a slider for quick changes, with a number box next
+    # to it (no +/- buttons; the "wdnum_" container key hides them, see
+    # styles.py) for typing an exact value. The NUMBER box's key holds the
+    # real value -- the same keys as before, which the Quote Estimator also
+    # sets -- and the slider just mirrors it.
+    WINDOW_SLIDER_MAX_WIDTH_MM = 6000    # slider range only; any width can be typed
+    WINDOW_SLIDER_MAX_HEIGHT_MM = 3000   # slider range only; any height can be typed
+    WINDOW_SLIDER_STEP_MM = 10
+
+    def window_mm_input(label, key, slider_max, min_value=1, max_value=None,
+                        on_change=None, args=()):
+        """
+        A slider and a number box for one size in mm, kept in step.
+        slider_max: the slider's top end (max_value, if given, also caps
+        the number box). Returns the value.
+        """
+        slider_key = f"{key}__slider"
+        if max_value is not None:
+            slider_max = max_value
+        slider_max = max(slider_max, min_value + 1)
+        # The slider shows the number box's value (held at its ends if the
+        # typed value is outside the slider's range).
+        st.session_state[slider_key] = min(max(int(st.session_state[key]), 0), slider_max)
+
+        def _slider_moved():
+            st.session_state[key] = max(st.session_state[slider_key], min_value)
+            if on_change is not None:
+                on_change(*args)
+
+        col_slider, col_number = st.columns([3, 1], vertical_alignment="bottom")
+        with col_slider:
+            st.slider(label, min_value=0, max_value=slider_max, step=WINDOW_SLIDER_STEP_MM,
+                      key=slider_key, on_change=_slider_moved)
+        with col_number:
+            with st.container(key=f"wdnum_{key}"):
+                st.number_input(label, min_value=min_value, max_value=max_value,
+                                step=WINDOW_SLIDER_STEP_MM, key=key,
+                                label_visibility="collapsed",
+                                on_change=on_change, args=args)
+        return st.session_state[key]
+
     with col_options:
         render_eyebrow("Size")
         # Starting sizes go through session state rather than value=, because
@@ -1038,15 +1078,10 @@ elif st.session_state.active_view == 'Quote Estimator':
         # Streamlit show a warning.
         st.session_state.setdefault("window_diagram_width", 1200)
         st.session_state.setdefault("window_diagram_height", 1500)
-        col_w, col_h = st.columns(2)
-        with col_w:
-            window_width_mm = st.number_input(
-                "Width (mm)", min_value=1, step=10, key="window_diagram_width"
-            )
-        with col_h:
-            window_height_mm = st.number_input(
-                "Height (mm)", min_value=1, step=10, key="window_diagram_height"
-            )
+        window_width_mm = window_mm_input(
+            "Width (mm)", "window_diagram_width", WINDOW_SLIDER_MAX_WIDTH_MM)
+        window_height_mm = window_mm_input(
+            "Height (mm)", "window_diagram_height", WINDOW_SLIDER_MAX_HEIGHT_MM)
 
         render_eyebrow("Panels")
         panel_count = st.radio(
@@ -1098,25 +1133,26 @@ elif st.session_state.active_view == 'Quote Estimator':
             for pos, tab in zip(positions, tabs):
                 with tab:
                     if panel_count == 2:
-                        st.number_input(
-                            "Width (mm)", min_value=1, max_value=window_width_mm - 1,
-                            step=10, key=f"window_diagram_panel_width_{pos}",
+                        window_mm_input(
+                            "Width (mm)", f"window_diagram_panel_width_{pos}",
+                            WINDOW_SLIDER_MAX_WIDTH_MM, max_value=window_width_mm - 1,
                             on_change=(_window_two_left_changed if pos == "left"
                                        else _window_two_right_changed),
                         )
                     elif pos == "middle":
-                        st.number_input(
-                            "Width (mm)", step=10, key="window_diagram_panel_width_middle",
-                            disabled=True,
-                            help="The middle panel fills the space between the side panels.",
-                        )
+                        with st.container(key="wdnum_window_diagram_panel_width_middle"):
+                            st.number_input(
+                                "Width (mm)", step=10, key="window_diagram_panel_width_middle",
+                                disabled=True,
+                                help="The middle panel fills the space between the side panels.",
+                            )
                     else:
                         other_side = "right" if pos == "left" else "left"
-                        st.number_input(
-                            "Width (mm)", min_value=1,
+                        window_mm_input(
+                            "Width (mm)", f"window_diagram_panel_width_{pos}",
+                            WINDOW_SLIDER_MAX_WIDTH_MM,
                             # Always leave at least 1 mm for the middle panel.
                             max_value=window_width_mm - window_widths_mm[other_side] - 1,
-                            step=10, key=f"window_diagram_panel_width_{pos}",
                             on_change=_window_three_side_changed, args=(pos,),
                         )
                     window_panel_controls(pos, positions, window_height_mm)
