@@ -32,6 +32,32 @@ st.set_page_config(
 inject_css()
 render_header()
 
+# ── Sidebar: refresh shared data ─────────────────────────────────────────
+# Streamlit Cloud only shows "Clear cache" in the ⋮ menu to the app's owner,
+# so this gives everyone a way to pick up edits to the Google Sheets / Drive
+# folder without waiting for the caches to expire. It does what that menu
+# item does (clears Streamlit's data and resource caches), plus restarts
+# the background hardware loader (LHH sheet + Drive images), which keeps
+# its own data outside Streamlit's cache. The caches are shared by
+# everyone using the app, so a refresh applies to all users at once.
+with st.sidebar:
+    render_eyebrow("Data")
+    st.caption("Edited a Google Sheet or the Drive image folder? Refresh to load the "
+               "latest. This refreshes the data for everyone using the app.")
+    if st.button("Refresh data", key="refresh_data", use_container_width=True):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        try:
+            # Starts a fresh background load; the PDF Editor shows its progress
+            # (and any error) the same way as on a normal start-up.
+            get_hardware_loader(force=True)
+        except Exception:
+            pass
+        st.session_state["data_refreshed"] = True
+        st.rerun()
+    if st.session_state.pop("data_refreshed", False):
+        st.toast("Data refreshed - the latest sheet data is loading now.", icon="✅")
+
 # ── View switcher ────────────────────────────────────────────────────────
 # Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
 # rerun regardless of which one is visually shown, so st.tabs() alone
