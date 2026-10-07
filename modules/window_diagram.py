@@ -30,6 +30,9 @@ MARGIN_LEFT   = 30
 MARGIN_TOP    = 30
 DIM_GAP       = 25    # gap between the drawing and its dimension line
 TOTAL_DIM_GAP = 40    # split windows: extra gap down to the overall-width line
+# Windows with a fixed bottom section: extra room on the right, from the
+# top/bottom height line out to the overall-height line beyond it.
+TOTAL_HEIGHT_DIM_GAP = 75
 DIM_TICK      = 8     # length of the little end-ticks on dimension lines
 LABEL_FONTSIZE = 16
 
@@ -170,7 +173,11 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         and 'tilt_only', with the same meanings as the single-panel
         arguments above. When given, it replaces swing / handle_side /
         tilt / tilt_only / split and all the *_2 options. Not used with
-        slide (sliding is always two panels).
+        slide (sliding is always two panels). A panel dict may also have
+        'top_height_mm': the panel is then split by a transom (horizontal
+        frame member) at that height from the top; the panel's type
+        applies to the TOP section, and the bottom section is always fixed
+        glass. None or missing = no bottom section.
     panel_widths_mm: each panel's width in mm, left to right, matching
         panels; they must add up to width_mm. None (the default) makes
         the panels equal.
@@ -260,7 +267,8 @@ def _pane_options(swing, handle_side, tilt, tilt_only, split,
             raise ValueError("panels must contain at least one panel")
         panes = [dict(swing=bool(p.get('swing')), handle_side=p.get('handle_side', 'right'),
                       tilt=bool(p.get('tilt')), tilt_only=bool(p.get('tilt_only')),
-                      slide_dir=None)
+                      slide_dir=None,
+                      top_height_mm=p.get('top_height_mm'))
                  for p in panels]
     else:
         panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only,
@@ -297,6 +305,15 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     if count == 2 and split_left_mm is not None and not 0 < split_left_mm < width_mm:
         raise ValueError(f"split_left_mm must be between 0 and width_mm "
                          f"(got {split_left_mm} for width {width_mm})")
+    for pane in panes:
+        top_mm = pane.get('top_height_mm')
+        if top_mm is not None and not 0 < top_mm < height_mm:
+            raise ValueError(f"top_height_mm must be between 0 and height_mm "
+                             f"(got {top_mm} for height {height_mm})")
+    # The first panel with a bottom section sets the top/bottom height
+    # dimension (panels with different top heights only show the first).
+    dimensioned_top_mm = next((p['top_height_mm'] for p in panes
+                               if p.get('top_height_mm') is not None), None)
     if panel_widths_mm is not None:
         if len(panel_widths_mm) != count:
             raise ValueError(f"panel_widths_mm has {len(panel_widths_mm)} widths "
@@ -310,6 +327,8 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     draw_h = height_mm * scale
 
     page_w = MARGIN_LEFT + draw_w + 90   # extra room for the height dimension label
+    if dimensioned_top_mm is not None:
+        page_w += TOTAL_HEIGHT_DIM_GAP   # room for the second (overall) height line
     page_h = MARGIN_TOP + draw_h + DIM_GAP + 40
     if split:
         page_h += TOTAL_DIM_GAP          # room for the second (overall) width line
@@ -354,12 +373,14 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         for i in range(count):
             gx0 = x0 + frame_thickness if i == 0 else xs[i] + mullion_half
             gx1 = x1 - frame_thickness if i == count - 1 else xs[i + 1] - mullion_half
-            glass = fitz.Rect(gx0, y0 + frame_thickness, gx1, y1 - frame_thickness)
-            page.draw_rect(glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+            for glass in _fixed_glass_rects(gx0, gx1, y0 + frame_thickness, y1 - frame_thickness,
+                                            _transom_y(panes[i], y0, scale), mullion_half):
+                page.draw_rect(glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
     else:
-        inner = fitz.Rect(x0 + frame_thickness, y0 + frame_thickness,
-                          x1 - frame_thickness, y1 - frame_thickness)
-        page.draw_rect(inner, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+        for inner in _fixed_glass_rects(x0 + frame_thickness, x1 - frame_thickness,
+                                        y0 + frame_thickness, y1 - frame_thickness,
+                                        _transom_y(panes[0], y0, scale), mullion_half):
+            page.draw_rect(inner, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
 
     # Frame construction seams: the top and bottom rails run the FULL
     # width, and the side stiles fit between them. A short line at each
@@ -393,9 +414,14 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         pane_layout = [(outer, None)]
     for options, (pane_rect, mullion_side) in zip(panes, pane_layout):
         if options['swing']:
+            transom_y = _transom_y(options, y0, scale)
+            if transom_y is not None:
+                # Only the top section opens; its sash stops at the transom.
+                pane_rect = fitz.Rect(pane_rect.x0, pane_rect.y0, pane_rect.x1, transom_y)
             _draw_sash(page, pane_rect, scale, frame_thickness, frame_color, glass_color,
                        options['handle_side'], sash_margin_mm, options['tilt'], mullion_side,
-                       options['tilt_only'], options['slide_dir'])
+                       options['tilt_only'], options['slide_dir'],
+                       transom_below=transom_y is not None)
 
     # Width dimension line (below). Split windows get each pane's width
     # here, plus the overall width on a second line further down.
@@ -406,8 +432,21 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         dim_y += TOTAL_DIM_GAP
     _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
 
-    # Height dimension line (right)
+    # Height dimension line (right). With a fixed bottom section, the top
+    # and bottom heights go on this line, and the overall height on a
+    # second line further right.
     dim_x = x1 + DIM_GAP
+    if dimensioned_top_mm is not None:
+        transom_y = y0 + dimensioned_top_mm * scale
+        page.draw_line((dim_x, y0), (dim_x, y1), color=dim_color, width=1)
+        for y in (y0, transom_y, y1):
+            page.draw_line((dim_x - DIM_TICK / 2, y), (dim_x + DIM_TICK / 2, y),
+                           color=dim_color, width=1)
+        for label, top, bottom in ((_format_mm(dimensioned_top_mm), y0, transom_y),
+                                   (_format_mm(height_mm - dimensioned_top_mm), transom_y, y1)):
+            page.insert_text((dim_x + 10, (top + bottom) / 2 + 5), label,
+                              fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
+        dim_x += TOTAL_HEIGHT_DIM_GAP
     page.draw_line((dim_x, y0), (dim_x, y1), color=dim_color, width=1)
     page.draw_line((dim_x - DIM_TICK / 2, y0), (dim_x + DIM_TICK / 2, y0), color=dim_color, width=1)
     page.draw_line((dim_x - DIM_TICK / 2, y1), (dim_x + DIM_TICK / 2, y1), color=dim_color, width=1)
@@ -416,6 +455,24 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
                       fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
 
     return doc
+
+
+def _transom_y(pane, y0, scale):
+    """The y of a panel's transom centre line, or None if it has no bottom section."""
+    top_mm = pane.get('top_height_mm')
+    return None if top_mm is None else y0 + top_mm * scale
+
+
+def _fixed_glass_rects(gx0, gx1, gy0, gy1, transom_y, transom_half):
+    """
+    The fixed glass rectangle(s) for one panel: one rectangle normally,
+    or two (above and below) when transom_y is set, with a transom the
+    same thickness as a mullion (2 x transom_half) centred on transom_y.
+    """
+    if transom_y is None:
+        return [fitz.Rect(gx0, gy0, gx1, gy1)]
+    return [fitz.Rect(gx0, gy0, gx1, transom_y - transom_half),
+            fitz.Rect(gx0, transom_y + transom_half, gx1, gy1)]
 
 
 def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
@@ -434,7 +491,8 @@ def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
 
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
-               sash_margin_mm, tilt, mullion_side=None, tilt_only=False, slide_dir=None):
+               sash_margin_mm, tilt, mullion_side=None, tilt_only=False, slide_dir=None,
+               transom_below=False):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -452,6 +510,8 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
         pointing that way and no handle; opening lines only if tilt
         (tilt + side-hung lines) or tilt_only (tilt lines) is set. None
         for a normal opening sash.
+    transom_below: True when `outer` is the top section of a panel with
+        a fixed bottom section; the sash margin is halved at the bottom.
 
     Parts are drawn at their real mm sizes on panes whose shorter side
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
@@ -473,8 +533,11 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
     left_inset  = inset / 2 if mullion_side in ('left', 'both') else inset
     right_inset = inset / 2 if mullion_side in ('right', 'both') else inset
+    # Above a transom, the sash also leaves only half its margin at the
+    # bottom, the same way it does next to a mullion.
+    bottom_inset = inset / 2 if transom_below else inset
     sash = fitz.Rect(outer.x0 + left_inset, outer.y0 + inset,
-                     outer.x1 - right_inset, outer.y1 - inset)
+                     outer.x1 - right_inset, outer.y1 - bottom_inset)
 
     max_across = sash.width * SASH_MEMBER_MAX_RATIO
     max_down   = sash.height * SASH_MEMBER_MAX_RATIO

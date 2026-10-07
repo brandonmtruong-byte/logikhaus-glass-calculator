@@ -275,8 +275,10 @@ def _apply_to_diagram(w, h, swing, tilt):
         panels = st.session_state["window_diagram_panels"] = {}
     panels.setdefault("left", {"type": "Fixed", "handle_side": "Right", "slide_tilt": "None"})
     panels["left"]["type"] = panel_type
+    panels["left"]["bottom"] = False          # a pasted size is one plain panel
     st.session_state["window_diagram_panel_count"] = 1
     st.session_state["window_diagram_type_left"] = panel_type
+    st.session_state["window_diagram_bottom_left"] = False
 
 
 def _strip_label(txt, *labels):

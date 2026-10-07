@@ -850,7 +850,28 @@ elif st.session_state.active_view == 'Quote Estimator':
     for _pos, _handle in (("left", "Right"), ("middle", "Right"), ("right", "Left")):
         panels.setdefault(_pos, {"type": "Fixed", "handle_side": _handle, "slide_tilt": "None"})
 
-    def window_panel_controls(pos, positions):
+    # Fixed bottom section: default top height as a fraction of the window
+    # height (rounded to 10 mm), used until a top height is typed in.
+    WINDOW_DEFAULT_TOP_RATIO = 0.7
+
+    def window_top_mm(panel, height_mm):
+        """
+        Top-section height for a panel with a fixed bottom section: the one
+        typed in, or the default. Falls back to the default if the window
+        height has shrunk so far that the typed one no longer fits.
+        """
+        top = panel.get("top_mm")
+        if top is not None and 1 <= top <= height_mm - 1:
+            return int(top)
+        panel["top_mm"] = None
+        default = int(round(height_mm * WINDOW_DEFAULT_TOP_RATIO / 10) * 10)
+        return min(max(default, 1), height_mm - 1)
+
+    def _window_top_changed(pos):
+        st.session_state["window_diagram_panels"][pos]["top_mm"] = \
+            st.session_state[f"window_diagram_top_height_{pos}"]
+
+    def window_panel_controls(pos, positions, height_mm):
         """Type + the options for that type, for the panel at `pos`."""
         panel = panels[pos]
         type_key = f"window_diagram_type_{pos}"
@@ -903,6 +924,33 @@ elif st.session_state.active_view == 'Quote Estimator':
             panel["handle_side"] = st.radio(
                 "Handle side", WINDOW_SIDES, horizontal=True, key=handle_key,
             )
+
+        # Fixed bottom section: splits this panel with a transom. The type
+        # above applies to the top section; the bottom is always fixed. Not
+        # offered on sliding windows (neither the sliding panel nor its
+        # fixed partner), or on windows too short to split.
+        if panel["type"] != "Sliding" and len(allowed) > 1 and height_mm >= 2:
+            bottom_key = f"window_diagram_bottom_{pos}"
+            if bottom_key not in st.session_state:
+                st.session_state[bottom_key] = panel.get("bottom", False)
+            panel["bottom"] = st.checkbox("Fixed bottom section", key=bottom_key)
+            if panel["bottom"]:
+                top_mm = window_top_mm(panel, height_mm)
+                st.session_state[f"window_diagram_top_height_{pos}"] = top_mm
+                st.session_state[f"window_diagram_bottom_height_{pos}"] = height_mm - top_mm
+                col_top, col_bottom = st.columns(2)
+                with col_top:
+                    st.number_input(
+                        "Top height (mm)", min_value=1, max_value=height_mm - 1, step=10,
+                        key=f"window_diagram_top_height_{pos}",
+                        on_change=_window_top_changed, args=(pos,),
+                    )
+                with col_bottom:
+                    st.number_input(
+                        "Bottom height (mm)", step=10, disabled=True,
+                        key=f"window_diagram_bottom_height_{pos}",
+                        help="The bottom section takes up the rest of the height.",
+                    )
 
     # Panel widths. Only the widths that can be typed in are stored (None
     # = default); the rest is always "overall width minus those", so the
@@ -965,7 +1013,7 @@ elif st.session_state.active_view == 'Quote Estimator':
         render_eyebrow("Panel options")
         window_widths_mm = None
         if panel_count == 1:
-            window_panel_controls("left", positions)
+            window_panel_controls("left", positions, window_height_mm)
         else:
             if panel_count == 2:
                 # Left width: the one set in a width box, or half. Back to
@@ -1024,7 +1072,7 @@ elif st.session_state.active_view == 'Quote Estimator':
                             step=10, key=f"window_diagram_panel_width_{pos}",
                             on_change=_window_three_side_changed, args=(pos,),
                         )
-                    window_panel_controls(pos, positions)
+                    window_panel_controls(pos, positions, window_height_mm)
 
     # Turn the panels into the drawing's options.
     window_slide = False
@@ -1047,6 +1095,8 @@ elif st.session_state.active_view == 'Quote Estimator':
             diagram_options["panels"].append(dict(
                 swing=swing, tilt=tilt, tilt_only=tilt_only,
                 handle_side=p["handle_side"].lower(),
+                top_height_mm=(window_top_mm(p, window_height_mm)
+                               if p.get("bottom") and window_height_mm >= 2 else None),
             ))
         if window_widths_mm is not None:
             diagram_options["panel_widths_mm"] = [window_widths_mm[pos] for pos in positions]
