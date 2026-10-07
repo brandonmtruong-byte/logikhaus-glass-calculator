@@ -838,7 +838,8 @@ elif st.session_state.active_view == 'Quote Estimator':
     # (e.g. the right panel's while showing 1 panel), and storing by
     # position means switching between 2 and 3 panels never moves one
     # panel's settings onto another.
-    WINDOW_PANEL_TYPES = ["Fixed", "Side-hung", "Tilt & turn", "Tilt only", "Sliding"]
+    WINDOW_PANEL_TYPES = ["Fixed", "Side-hung", "Tilt & turn", "Tilt only", "French doors",
+                          "Sliding"]
     WINDOW_SLIDE_TILT = ["None", "Tilt", "Tilt & turn"]
     WINDOW_SIDES = ["Left", "Right"]
     WINDOW_POSITIONS = {1: ["left"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
@@ -906,7 +907,7 @@ elif st.session_state.active_view == 'Quote Estimator':
         if len(allowed) == 1:
             st.caption("Fixed, because the other panel slides.")
 
-        show_handle = panel["type"] in ("Side-hung", "Tilt & turn")
+        show_handle = panel["type"] in ("Side-hung", "Tilt & turn", "French doors")
         if panel["type"] == "Sliding":
             st.caption(f"Slides towards the {other} panel.")
             tilt_key = f"window_diagram_slide_tilt_{pos}"
@@ -923,6 +924,10 @@ elif st.session_state.active_view == 'Quote Estimator':
                 st.session_state[handle_key] = panel["handle_side"]
             panel["handle_side"] = st.radio(
                 "Handle side", WINDOW_SIDES, horizontal=True, key=handle_key,
+                # French doors: the two doors are always exactly half each;
+                # this only picks which one has the handle.
+                help=("Which of the two doors has the handle."
+                      if panel["type"] == "French doors" else None),
             )
 
         # Fixed bottom section: splits this panel with a transom. The type
@@ -976,12 +981,13 @@ elif st.session_state.active_view == 'Quote Estimator':
             st.session_state[f"window_diagram_panel_width_{pos}"]
 
     def window_opening(panel):
-        """(swing, tilt, tilt_only) drawing options for a non-sliding panel."""
+        """(swing, tilt, tilt_only, french) drawing options for a non-sliding panel."""
         return {
-            "Fixed":       (False, False, False),
-            "Side-hung":   (True,  False, False),
-            "Tilt & turn": (True,  True,  False),
-            "Tilt only":   (True,  False, True),
+            "Fixed":        (False, False, False, False),
+            "Side-hung":    (True,  False, False, False),
+            "Tilt & turn":  (True,  True,  False, False),
+            "Tilt only":    (True,  False, True,  False),
+            "French doors": (False, False, False, True),
         }[panel["type"]]
 
     with col_options:
@@ -1091,9 +1097,9 @@ elif st.session_state.active_view == 'Quote Estimator':
     else:
         diagram_options = dict(panels=[], panel_widths_mm=None)
         for p in row:
-            swing, tilt, tilt_only = window_opening(p)
+            swing, tilt, tilt_only, french = window_opening(p)
             diagram_options["panels"].append(dict(
-                swing=swing, tilt=tilt, tilt_only=tilt_only,
+                swing=swing, tilt=tilt, tilt_only=tilt_only, french=french,
                 handle_side=p["handle_side"].lower(),
                 top_height_mm=(window_top_mm(p, window_height_mm)
                                if p.get("bottom") and window_height_mm >= 2 else None),

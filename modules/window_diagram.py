@@ -177,7 +177,12 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         'top_height_mm': the panel is then split by a transom (horizontal
         frame member) at that height from the top; the panel's type
         applies to the TOP section, and the bottom section is always fixed
-        glass. None or missing = no bottom section.
+        glass. None or missing = no bottom section. A panel dict with
+        'french': True is a pair of French doors instead: two equal doors
+        meeting in the middle with no mullion, each hinged on its outer
+        side, and only one handle -- on the door named by 'handle_side'
+        ('left' / 'right'), at the meeting edge. 'swing' / 'tilt' /
+        'tilt_only' are ignored for French doors.
     panel_widths_mm: each panel's width in mm, left to right, matching
         panels; they must add up to width_mm. None (the default) makes
         the panels equal.
@@ -268,7 +273,7 @@ def _pane_options(swing, handle_side, tilt, tilt_only, split,
         panes = [dict(swing=bool(p.get('swing')), handle_side=p.get('handle_side', 'right'),
                       tilt=bool(p.get('tilt')), tilt_only=bool(p.get('tilt_only')),
                       slide_dir=None,
-                      top_height_mm=p.get('top_height_mm'))
+                      top_height_mm=p.get('top_height_mm'), french=bool(p.get('french')))
                  for p in panels]
     else:
         panes = [dict(swing=swing, handle_side=handle_side, tilt=tilt, tilt_only=tilt_only,
@@ -330,7 +335,8 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     if dimensioned_top_mm is not None:
         page_w += TOTAL_HEIGHT_DIM_GAP   # room for the second (overall) height line
     page_h = MARGIN_TOP + draw_h + DIM_GAP + 40
-    if split:
+    has_french = any(p.get('french') for p in panes)
+    if split or has_french:
         page_h += TOTAL_DIM_GAP          # room for the second (overall) width line
 
     doc = fitz.open()
@@ -413,22 +419,39 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
     else:
         pane_layout = [(outer, None)]
     for options, (pane_rect, mullion_side) in zip(panes, pane_layout):
-        if options['swing']:
+        if options['swing'] or options.get('french'):
             transom_y = _transom_y(options, y0, scale)
             if transom_y is not None:
                 # Only the top section opens; its sash stops at the transom.
                 pane_rect = fitz.Rect(pane_rect.x0, pane_rect.y0, pane_rect.x1, transom_y)
-            _draw_sash(page, pane_rect, scale, frame_thickness, frame_color, glass_color,
-                       options['handle_side'], sash_margin_mm, options['tilt'], mullion_side,
-                       options['tilt_only'], options['slide_dir'],
-                       transom_below=transom_y is not None)
+            if options.get('french'):
+                _draw_french_doors(page, pane_rect, scale, frame_thickness, frame_color,
+                                   glass_color, options['handle_side'], sash_margin_mm,
+                                   mullion_side, transom_below=transom_y is not None)
+            else:
+                _draw_sash(page, pane_rect, scale, frame_thickness, frame_color, glass_color,
+                           options['handle_side'], sash_margin_mm, options['tilt'], mullion_side,
+                           options['tilt_only'], options['slide_dir'],
+                           transom_below=transom_y is not None)
 
     # Width dimension line (below). Split windows get each pane's width
     # here, plus the overall width on a second line further down.
     dim_color = (0.15, 0.15, 0.15)
     dim_y = y1 + DIM_GAP
-    if split:
-        _draw_width_dimension(page, xs, dim_y, [_format_mm(w) for w in widths_mm], dim_color)
+    # French doors are always split exactly in half, so their halves get
+    # their own ticks and labels on this line too.
+    dim_xs, dim_widths = [x0], []
+    for i, (pane, w_mm) in enumerate(zip(panes, widths_mm)):
+        if pane.get('french'):
+            dim_xs.append((xs[i] + xs[i + 1]) / 2)
+            dim_widths += [w_mm / 2, w_mm / 2]
+        else:
+            dim_widths.append(w_mm)
+        dim_xs.append(xs[i + 1] if split else x1)
+    if split or has_french:
+        _draw_width_dimension(page, dim_xs if has_french else xs, dim_y,
+                              [_format_mm(w) for w in (dim_widths if has_french else widths_mm)],
+                              dim_color)
         dim_y += TOTAL_DIM_GAP
     _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
 
@@ -455,6 +478,32 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
                       fontsize=LABEL_FONTSIZE, color=(0.1, 0.1, 0.1))
 
     return doc
+
+
+def _draw_french_doors(page, outer, scale, frame_thickness, frame_color, glass_color,
+                       handle_side, sash_margin_mm, mullion_side, transom_below):
+    """
+    A pair of French doors filling `outer` (one panel): two doors exactly
+    half the width each, meeting in the middle with no mullion. Each is
+    hinged on its OUTER side, so both sets of opening lines point to the
+    middle. Only the door on handle_side ('left' / 'right') gets a handle,
+    at the meeting edge.
+
+    mullion_side / transom_below: as for _draw_sash(), for the panel as a
+    whole -- each door takes the side(s) of these that it touches.
+    """
+    mid = (outer.x0 + outer.x1) / 2
+    for door_side, rect in (('left', fitz.Rect(outer.x0, outer.y0, mid, outer.y1)),
+                            ('right', fitz.Rect(mid, outer.y0, outer.x1, outer.y1))):
+        # Keep a mullion only on this door's own outer side.
+        door_mullion = mullion_side if mullion_side in (door_side, None) else None
+        if mullion_side == 'both':
+            door_mullion = door_side
+        meeting = 'right' if door_side == 'left' else 'left'
+        _draw_sash(page, rect, scale, frame_thickness, frame_color, glass_color,
+                   meeting, sash_margin_mm, False, door_mullion,
+                   transom_below=transom_below, meeting_side=meeting,
+                   draw_handle=door_side == handle_side)
 
 
 def _transom_y(pane, y0, scale):
@@ -492,7 +541,7 @@ def _draw_width_dimension(page, xs, dim_y, labels, dim_color):
 
 def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, handle_side,
                sash_margin_mm, tilt, mullion_side=None, tilt_only=False, slide_dir=None,
-               transom_below=False):
+               transom_below=False, meeting_side=None, draw_handle=True):
     """
     Draw the opening sash on top of the already-drawn fixed window.
 
@@ -512,6 +561,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
         for a normal opening sash.
     transom_below: True when `outer` is the top section of a panel with
         a fixed bottom section; the sash margin is halved at the bottom.
+    meeting_side: 'left' / 'right' for one door of a French pair -- the
+        side where it meets the other door, with no margin at all.
+    draw_handle: False leaves the handle off (the passive French door).
 
     Parts are drawn at their real mm sizes on panes whose shorter side
     is at least SASH_REFERENCE_SIZE_MM, and shrunk together below that.
@@ -533,6 +585,10 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
     inset = min(sash_margin_mm * part_scale, frame_thickness * SASH_MARGIN_MAX_FRAME_RATIO)
     left_inset  = inset / 2 if mullion_side in ('left', 'both') else inset
     right_inset = inset / 2 if mullion_side in ('right', 'both') else inset
+    if meeting_side == 'left':
+        left_inset = 0
+    elif meeting_side == 'right':
+        right_inset = 0
     # Above a transom, the sash also leaves only half its margin at the
     # bottom, the same way it does next to a mullion.
     bottom_inset = inset / 2 if transom_below else inset
@@ -565,6 +621,9 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
         return
 
     _draw_opening_lines(page, glass, handle_side, tilt, tilt_only)
+
+    if not draw_handle:
+        return
 
     # Handle. Drawn after the opening lines so it sits on top of them.
     half_len = max(HANDLE_LENGTH_MM * part_scale, HANDLE_MIN_LENGTH_PT) / 2
