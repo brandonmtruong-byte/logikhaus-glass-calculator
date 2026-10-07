@@ -259,11 +259,22 @@ def _money(x):
 
 
 def _apply_to_diagram(w, h, swing, tilt):
-    """Button callback: push the pasted size/opening into the diagram widgets."""
+    """
+    Button callback: push the pasted size/opening into the diagram. Sets
+    a single panel whose type matches the opening (Fixed / Side-hung /
+    Tilt & turn), keeping the panel settings app.py stores in
+    st.session_state["window_diagram_panels"].
+    """
     st.session_state["window_diagram_width"] = int(w)
     st.session_state["window_diagram_height"] = int(h)
-    st.session_state["window_diagram_swing"] = bool(swing)
-    st.session_state["window_diagram_tilt"] = bool(swing and tilt)
+    panel_type = "Tilt & turn" if (swing and tilt) else "Side-hung" if swing else "Fixed"
+    panels = st.session_state.setdefault("window_diagram_panels", [
+        {"type": "Fixed", "handle_side": "Right", "slide_tilt": "None"},
+        {"type": "Fixed", "handle_side": "Left", "slide_tilt": "None"},
+    ])
+    panels[0]["type"] = panel_type
+    st.session_state["window_diagram_panel_count"] = 1
+    st.session_state["window_diagram_type_0"] = panel_type
 
 
 def _strip_label(txt, *labels):

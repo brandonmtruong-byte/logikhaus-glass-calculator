@@ -827,106 +827,142 @@ elif st.session_state.active_view == 'Quote Estimator':
     # the "window_diagram_panel" rule in styles.py).
     col_options, col_diagram = st.columns(2, gap="medium")
 
-    def window_pane_controls(key_suffix, default_handle_side, allow_slide=False):
-        """
-        Opening sash / sliding / tilt and turn / tilt only / handle side for
-        one pane. allow_slide adds the Sliding toggle and its side choice
-        (single, unsplit windows only -- sliding already divides the window
-        in two). Returns (swing, tilt, tilt_only, handle_side, slide, slide_side).
-        """
-        # Read before the widgets are drawn, so options that don't apply
-        # can be greyed out straight away.
-        tilt_only_on = st.session_state.get(f"window_diagram_tilt_only{key_suffix}", False)
-        slide_on = allow_slide and st.session_state.get("window_diagram_slide", False)
-        tilt_on = st.session_state.get(f"window_diagram_tilt{key_suffix}", False)
+    # ── Panel-based options ─────────────────────────────────────────────
+    # The window is a row of panels (currently 1 or 2), and each panel has
+    # ONE type. Only the selected panel's options are shown at a time, and
+    # each type shows only the options that apply to it.
+    #
+    # Each panel's settings live in st.session_state["window_diagram_panels"]
+    # rather than only in widget state: Streamlit forgets the state of any
+    # widget that isn't drawn on a run, and only one panel's widgets are
+    # drawn at a time, so the other panel's settings would otherwise be lost.
+    WINDOW_PANEL_TYPES = ["Fixed", "Side-hung", "Tilt & turn", "Tilt only", "Sliding"]
+    WINDOW_SLIDE_TILT = ["None", "Tilt", "Tilt & turn"]
+    WINDOW_PANEL_NAMES = ["Left", "Right"]
 
-        swing = st.toggle(
-            "Opening sash", value=False, key=f"window_diagram_swing{key_suffix}",
-            disabled=slide_on,
-        )
-        slide = False
-        if allow_slide:
-            # Divides the window in two: one half slides, the other is fixed.
-            slide = st.toggle("Sliding", value=False, key="window_diagram_slide")
-        sash_on = (swing and not slide) or slide
+    panels = st.session_state.setdefault("window_diagram_panels", [
+        # Default handles face each other, so a pair meets in the middle.
+        {"type": "Fixed", "handle_side": "Right", "slide_tilt": "None"},
+        {"type": "Fixed", "handle_side": "Left", "slide_tilt": "None"},
+    ])
 
-        # Tilt + side-hung lines (on a sliding sash too).
-        tilt = st.toggle(
-            "Tilt and turn", value=False, key=f"window_diagram_tilt{key_suffix}",
-            disabled=not sash_on or tilt_only_on,
+    def window_panel_controls(index, panel_count):
+        """Type + the options for that type, for panel `index` (0 = left)."""
+        panel = panels[index]
+        other = panels[1 - index]
+        type_key = f"window_diagram_type_{index}"
+
+        if panel_count == 2 and other["type"] == "Sliding":
+            # The other panel slides over this one, so this one is fixed.
+            allowed = ["Fixed"]
+        elif panel_count == 2:
+            allowed = WINDOW_PANEL_TYPES
+        else:
+            # Sliding needs two panels: one slides, the other is fixed.
+            allowed = [t for t in WINDOW_PANEL_TYPES if t != "Sliding"]
+
+        if panel["type"] not in allowed:
+            panel["type"] = allowed[0]
+        # Widgets get their starting value through session state (not
+        # index=), so Streamlit doesn't warn about a value being set both
+        # ways when the Quote Estimator pushes a panel type in.
+        if st.session_state.get(type_key) not in allowed:
+            st.session_state[type_key] = panel["type"]
+
+        panel["type"] = st.selectbox(
+            "Type", allowed, key=type_key, disabled=len(allowed) == 1,
         )
-        # Tilt lines only. On an opening sash the handle moves to the top
-        # middle; overrides "Tilt and turn".
-        tilt_only = st.toggle(
-            "Tilt only", value=False, key=f"window_diagram_tilt_only{key_suffix}",
-            disabled=not sash_on,
-        )
-        # Side handle (opening sash), or which way the side-hung lines
-        # point (sliding sash with tilt and turn).
-        handle_side = st.radio(
-            "Handle side", ["Left", "Right"],
-            index=["Left", "Right"].index(default_handle_side), horizontal=True,
-            key=f"window_diagram_handle_side{key_suffix}",
-            disabled=(not sash_on or tilt_only_on
-                      or (slide_on and not tilt_on)),
-        )
-        slide_side = "left"
-        if allow_slide:
-            slide_side = st.radio(
-                "Sliding side", ["Left", "Right"], index=0, horizontal=True,
-                key="window_diagram_slide_side", disabled=not slide,
-            ).lower()
-        return (swing and not slide, tilt, tilt_only, handle_side.lower(),
-                slide, slide_side)
+        if len(allowed) == 1:
+            st.caption("Fixed, because the other panel slides.")
+
+        show_handle = panel["type"] in ("Side-hung", "Tilt & turn")
+        if panel["type"] == "Sliding":
+            st.caption(f"Slides towards the {WINDOW_PANEL_NAMES[1 - index].lower()} panel.")
+            tilt_key = f"window_diagram_slide_tilt_{index}"
+            if st.session_state.get(tilt_key) not in WINDOW_SLIDE_TILT:
+                st.session_state[tilt_key] = panel["slide_tilt"]
+            panel["slide_tilt"] = st.radio(
+                "Tilt", WINDOW_SLIDE_TILT, horizontal=True, key=tilt_key,
+            )
+            # The handle side sets which way the side-hung lines point.
+            show_handle = panel["slide_tilt"] == "Tilt & turn"
+        if show_handle:
+            handle_key = f"window_diagram_handle_side_{index}"
+            if st.session_state.get(handle_key) not in WINDOW_PANEL_NAMES:
+                st.session_state[handle_key] = panel["handle_side"]
+            panel["handle_side"] = st.radio(
+                "Handle side", WINDOW_PANEL_NAMES, horizontal=True, key=handle_key,
+            )
+
+    def window_opening(panel):
+        """(swing, tilt, tilt_only) drawing options for a non-sliding panel."""
+        return {
+            "Fixed":       (False, False, False),
+            "Side-hung":   (True,  False, False),
+            "Tilt & turn": (True,  True,  False),
+            "Tilt only":   (True,  False, True),
+        }[panel["type"]]
 
     with col_options:
-        render_eyebrow("Window dimensions")
+        render_eyebrow("Size")
+        # Starting sizes go through session state rather than value=, because
+        # the Quote Estimator also sets these keys -- giving both makes
+        # Streamlit show a warning.
+        st.session_state.setdefault("window_diagram_width", 1200)
+        st.session_state.setdefault("window_diagram_height", 1500)
         col_w, col_h = st.columns(2)
         with col_w:
             window_width_mm = st.number_input(
-                "Width (mm)", min_value=1, value=1200, step=10, key="window_diagram_width"
+                "Width (mm)", min_value=1, step=10, key="window_diagram_width"
             )
         with col_h:
             window_height_mm = st.number_input(
-                "Height (mm)", min_value=1, value=1500, step=10, key="window_diagram_height"
+                "Height (mm)", min_value=1, step=10, key="window_diagram_height"
             )
 
-        # Split: the overall size above stays the same, divided into two
-        # equal panes side by side, each with its own options.
-        # Greyed out while Sliding is on, which already divides the window.
-        window_split = st.checkbox(
-            "Split into two panes", value=False, key="window_diagram_split",
-            disabled=st.session_state.get("window_diagram_slide", False),
+        render_eyebrow("Panels")
+        panel_count = st.radio(
+            "Number of panels", [1, 2], horizontal=True,
+            key="window_diagram_panel_count", label_visibility="collapsed",
         )
 
-        # Same widget keys for the single window and the left pane, so a
-        # single window's settings carry over as the left pane's.
-        if window_split:
-            col_left_pane, col_right_pane = st.columns(2)
-            with col_left_pane:
-                render_eyebrow("Left pane")
-                (window_swing, window_tilt, window_tilt_only, window_handle_side,
-                 window_slide, window_slide_side) = window_pane_controls("", "Right")
-            with col_right_pane:
-                render_eyebrow("Right pane")
-                # Handle defaults to the left, so a pair meets in the middle.
-                (window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2,
-                 _, _) = window_pane_controls("_2", "Left")
+        render_eyebrow("Edit panel")
+        if panel_count == 2:
+            edit_name = st.radio(
+                "Panel", WINDOW_PANEL_NAMES, horizontal=True,
+                key="window_diagram_edit_panel", label_visibility="collapsed",
+            )
+            edit_index = WINDOW_PANEL_NAMES.index(edit_name)
         else:
-            render_eyebrow("Sash")
-            (window_swing, window_tilt, window_tilt_only, window_handle_side,
-             window_slide, window_slide_side) = window_pane_controls("", "Right", allow_slide=True)
-            window_swing_2, window_tilt_2, window_tilt_only_2, window_handle_side_2 = \
-                False, False, False, "left"
+            edit_index = 0
+        window_panel_controls(edit_index, panel_count)
 
-    diagram_options = dict(
-        swing=window_swing, handle_side=window_handle_side, tilt=window_tilt,
-        tilt_only=window_tilt_only,
-        split=window_split,
-        swing_2=window_swing_2, handle_side_2=window_handle_side_2, tilt_2=window_tilt_2,
-        tilt_only_2=window_tilt_only_2,
-        slide=window_slide, slide_side=window_slide_side,
-    )
+    # Turn the panels into the drawing's options.
+    left, right = panels
+    window_split = False
+    window_slide = False
+    if panel_count == 2 and "Sliding" in (left["type"], right["type"]):
+        slider = left if left["type"] == "Sliding" else right
+        window_slide = True
+        diagram_options = dict(
+            slide=True, slide_side="left" if slider is left else "right",
+            tilt=slider["slide_tilt"] == "Tilt & turn",
+            tilt_only=slider["slide_tilt"] == "Tilt",
+            handle_side=slider["handle_side"].lower(),
+        )
+    else:
+        swing, tilt, tilt_only = window_opening(left)
+        diagram_options = dict(
+            swing=swing, tilt=tilt, tilt_only=tilt_only,
+            handle_side=left["handle_side"].lower(),
+        )
+        if panel_count == 2:
+            window_split = True
+            swing_2, tilt_2, tilt_only_2 = window_opening(right)
+            diagram_options.update(
+                split=True, swing_2=swing_2, tilt_2=tilt_2, tilt_only_2=tilt_only_2,
+                handle_side_2=right["handle_side"].lower(),
+            )
 
     with col_diagram:
         with st.container(key="window_diagram_panel"):
