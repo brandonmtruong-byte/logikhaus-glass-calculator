@@ -40,23 +40,49 @@ render_header()
 # the background hardware loader (LHH sheet + Drive images), which keeps
 # its own data outside Streamlit's cache. The caches are shared by
 # everyone using the app, so a refresh applies to all users at once.
+#
+# Cooldown: Google limits how many Sheets reads the app's account can make
+# per minute (shared by everyone), and a refresh re-reads every sheet at
+# once, so it can only run once per REFRESH_COOLDOWN_S -- for everyone,
+# not per person.
+REFRESH_COOLDOWN_S = 60
+
+
+@st.cache_resource
+def _refresh_state():
+    """When "Refresh data" last ran, shared by every user of the app."""
+    return {"last": 0.0}
+
+
 with st.sidebar:
     render_eyebrow("Data")
     st.caption("Edited a Google Sheet or the Drive image folder? Refresh to load the "
                "latest. This refreshes the data for everyone using the app.")
     if st.button("Refresh data", key="refresh_data", use_container_width=True):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        try:
-            # Starts a fresh background load; the PDF Editor shows its progress
-            # (and any error) the same way as on a normal start-up.
-            get_hardware_loader(force=True)
-        except Exception:
-            pass
-        st.session_state["data_refreshed"] = True
+        import time
+        wait_s = REFRESH_COOLDOWN_S - (time.time() - _refresh_state()["last"])
+        if wait_s > 0:
+            st.session_state["data_refresh_wait"] = int(wait_s) + 1
+        else:
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            # Clearing the resource cache also cleared the cooldown record,
+            # so it's recorded again straight after.
+            _refresh_state()["last"] = time.time()
+            try:
+                # Starts a fresh background load; the PDF Editor shows its
+                # progress (and any error) the same way as on a normal start-up.
+                get_hardware_loader(force=True)
+            except Exception:
+                pass
+            st.session_state["data_refreshed"] = True
         st.rerun()
     if st.session_state.pop("data_refreshed", False):
         st.toast("Data refreshed - the latest sheet data is loading now.", icon="✅")
+    wait_s = st.session_state.pop("data_refresh_wait", None)
+    if wait_s:
+        st.toast(f"Data was refreshed less than a minute ago - try again in {wait_s} s. "
+                 "(Google limits how often the sheets can be read.)")
 
 # ── View switcher ────────────────────────────────────────────────────────
 # Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
@@ -362,7 +388,7 @@ if st.session_state.active_view == 'PDF Modifier':
             st.rerun()
     else:
         st.markdown(
-            f'<div class="status-box">⏳ Hardware data is loading in the background '
+            f'<div class="status-box">Hardware data is loading in the background '
             f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
             unsafe_allow_html=True
         )

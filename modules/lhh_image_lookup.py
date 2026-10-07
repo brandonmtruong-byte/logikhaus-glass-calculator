@@ -59,21 +59,34 @@ LHH_DRIVE_FOLDER_ID = '11gVQL1K1xrCm7j_UB7R_NqK63wqZTRtH'
 
 LHH_CODE_PATTERN = r'LHH\d+'
 
+# Product photos in the Drive folder are much larger than the schedule
+# needs (~1800 x 2400 px for a box about 22 x 30 mm, i.e. ~2000 pixels per
+# inch). Each one is shrunk to this many pixels per inch AT ITS PRINTED
+# SIZE before being inserted, matching the PDF download's own image
+# setting in app.py (dpi_target=1000), so nothing visible is lost and the
+# working document stays small. Photos already at or below this are
+# inserted unchanged.
+HARDWARE_IMAGE_PPI = 1000
+# JPEG quality used when a shrunk photo has no transparency (matches the
+# download's quality=95). Photos WITH transparency are kept as PNG, which
+# is lossless, so their transparent backgrounds survive.
+HARDWARE_IMAGE_JPEG_QUALITY = 95
+
 
 # ═════════════════════════════════════════════════════════════════════════
 #  SHEET LOOKUP
 # ═════════════════════════════════════════════════════════════════════════
 
-def _read_lookup_from_worksheet(worksheet):
+def _lookup_from_rows(rows):
     """
-    Read a single tab and return {code: {'description': ...}} from it.
+    Turn one tab's rows (a list of lists of cell strings, header row
+    first) into {code: {'description': ...}}.
     Fixed column positions -- column D (index 3) for Code, column I
     (index 8) for Description -- rather than searching for those words
     in the header row, since that search wasn't reliably landing on the
     right cells. Row 1 is still assumed to be the header (skipped);
     everything from row 2 down is read as data.
     """
-    rows = worksheet.get_all_values()
     if len(rows) < 2:
         return {}
 
@@ -88,6 +101,11 @@ def _read_lookup_from_worksheet(worksheet):
         description = row[DESC_COL].strip() if DESC_COL < len(row) else ''
         lookup[code] = {'description': description}
     return lookup
+
+
+def _read_lookup_from_worksheet(worksheet):
+    """Read a single tab (one Sheets request) -- kept for anything that still uses it."""
+    return _lookup_from_rows(worksheet.get_all_values())
 
 
 def _load_lhh_lookup_uncached(creds=None):
@@ -106,9 +124,20 @@ def _load_lhh_lookup_uncached(creds=None):
     gc = gspread.authorize(creds)
     spreadsheet = gc.open_by_key(LHH_SHEET_ID)
 
+    # ONE request for every tab's columns A-G (values_batch_get), rather
+    # than one request per tab. Google allows this app's account a limited
+    # number of Sheets reads per minute, shared by everyone using the app,
+    # and reading tab by tab used most of it on its own.
+    titles = [ws.title for ws in spreadsheet.worksheets()]
+    if not titles:
+        return {}
+    ranges = ["'{}'!A:G".format(title.replace("'", "''")) for title in titles]
+    response = spreadsheet.values_batch_get(ranges)
+
     combined_lookup = {}
-    for worksheet in spreadsheet.worksheets():
-        combined_lookup.update(_read_lookup_from_worksheet(worksheet))
+    for value_range in response.get('valueRanges', []):
+        # An empty tab comes back with no 'values' at all.
+        combined_lookup.update(_lookup_from_rows(value_range.get('values', [])))
     return combined_lookup
 
 
@@ -327,6 +356,31 @@ def _new_schedule_page(doc):
     return page, rows
 
 
+def _shrink_image(image_bytes, pixmap, img_rect):
+    """
+    Return image bytes sized for img_rect (the box the photo is printed
+    in, in points): at most HARDWARE_IMAGE_PPI pixels per inch. Returns
+    the original bytes untouched if the photo is already small enough,
+    or if anything goes wrong -- a full-size photo is better than none.
+
+    pixmap is fitz.Pixmap(image_bytes), already made by the caller.
+    """
+    try:
+        target_w = round(img_rect.width / 72 * HARDWARE_IMAGE_PPI)
+        target_h = round(img_rect.height / 72 * HARDWARE_IMAGE_PPI)
+        if pixmap.width <= target_w or pixmap.height <= target_h:
+            return image_bytes
+
+        small = fitz.Pixmap(pixmap, target_w, target_h)   # resample to the new size
+        if small.alpha:
+            return small.tobytes('png')                   # keep the transparency
+        if small.colorspace and small.colorspace.n not in (1, 3):
+            small = fitz.Pixmap(fitz.csRGB, small)        # e.g. CMYK -> RGB for JPEG
+        return small.tobytes('jpeg', jpg_quality=HARDWARE_IMAGE_JPEG_QUALITY)
+    except Exception:
+        return image_bytes
+
+
 def build_hardware_schedule(codes, lookup, drive_images, image_cache=None):
     """
     Build the Hardware Schedule as a standalone fitz.Document -- one or
@@ -380,7 +434,7 @@ def build_hardware_schedule(codes, lookup, drive_images, image_cache=None):
             try:
                 pixmap = fitz.Pixmap(image_bytes)
                 img_rect = fit_image_rect(layout['image_box'], pixmap.width, pixmap.height)
-                page.insert_image(img_rect, stream=image_bytes)
+                page.insert_image(img_rect, stream=_shrink_image(image_bytes, pixmap, img_rect))
             except Exception:
                 pass   # unreadable image -> row just has no image
 
@@ -394,7 +448,10 @@ def build_hardware_schedule(codes, lookup, drive_images, image_cache=None):
 # ═════════════════════════════════════════════════════════════════════════
 
 LOADER_MAX_AGE     = 900   # seconds before the sheet/folder data is refreshed
-ERROR_RETRY_AFTER  = 20    # seconds before a failed load is retried automatically
+# Seconds before a failed load is retried automatically. A full minute,
+# because Google's Sheets read limit is per minute: retrying sooner after a
+# "quota exceeded" error just uses up the next minute's allowance too.
+ERROR_RETRY_AFTER  = 60
 MAX_PREFETCH       = 500   # don't pre-download every image if the folder is huge
 
 
