@@ -19,12 +19,13 @@ from modules.steps import (
     apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
-from modules.window_diagram import draw_window_diagram, draw_window_diagram_pdf
+from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
+                                    FRAME_COLOURS, GLASS_COLOURS)
 from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus Web Tools",
+    page_title="Logikhaus PDF Fixr",
     page_icon="🪟",
     layout="centered"
 )
@@ -1148,6 +1149,16 @@ elif st.session_state.active_view == 'Quote Estimator':
         window_height_mm = window_mm_input(
             "Height (mm)", "window_diagram_height", WINDOW_SLIDER_MAX_HEIGHT_MM)
 
+        # Frame material and glass, each drawn in its own colour (the
+        # choices and colours live in window_diagram.py). Reset leaves these
+        # as they are, like the size.
+        render_eyebrow("Materials")
+        col_frame, col_glass = st.columns(2)
+        with col_frame:
+            window_frame = st.selectbox("Frame", list(FRAME_COLOURS), key="window_diagram_frame")
+        with col_glass:
+            window_glass = st.selectbox("Glass", list(GLASS_COLOURS), key="window_diagram_glass")
+
         render_eyebrow("Panels")
         panel_count = st.radio(
             "Number of panels", [1, 2, 3], horizontal=True,
@@ -1352,6 +1363,8 @@ elif st.session_state.active_view == 'Quote Estimator':
                 # No button, no gate -- this is cheap local vector drawing with
                 # no network/file I/O involved, so it just redraws on every change.
                 diagram_png = draw_window_diagram(window_width_mm, window_height_mm,
+                                                  frame_color=FRAME_COLOURS[window_frame],
+                                                  glass_color=GLASS_COLOURS[window_glass],
                                                   **diagram_options)
 
                 # Fit the diagram inside a max width (half the page) AND a max
@@ -1368,7 +1381,10 @@ elif st.session_state.active_view == 'Quote Estimator':
                 # Full-quality version: the same drawing as vector PDF on a
                 # blank A4 page, sharp at any zoom and ready to print.
                 diagram_pdf = draw_window_diagram_pdf(
-                    window_width_mm, window_height_mm, **diagram_options
+                    window_width_mm, window_height_mm,
+                    frame_color=FRAME_COLOURS[window_frame],
+                    glass_color=GLASS_COLOURS[window_glass],
+                    **diagram_options
                 )
                 st.download_button(
                     "Download PDF",

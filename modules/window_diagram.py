@@ -53,6 +53,26 @@ FRAME_REFERENCE_SIZE_MM = 600
 FRAME_COLOR = (0.95, 0.86, 0.71)   # light tan, #F2DCB6
 GLASS_COLOR = (0.82, 0.28, 0.57)   # magenta, #D04891, matching the reference images
 
+
+def _hex_rgb(hex_code):
+    """'#RRGGBB' -> (r, g, b) with each channel 0-1, fitz's colour convention."""
+    hex_code = hex_code.lstrip('#')
+    return tuple(int(hex_code[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+# Named colour choices, by the names used in the app's dropdowns (colours
+# sampled from the reference drawings). Pass one as frame_color /
+# glass_color, e.g. draw_window_diagram(..., glass_color=GLASS_COLOURS["4/4"]).
+# To add a choice, add a line here -- the app's dropdowns list whatever
+# is in these two dicts, in this order.
+FRAME_COLOURS = {
+    "Pine": _hex_rgb("#F1DCB9"),
+}
+GLASS_COLOURS = {
+    "4/4":   _hex_rgb("#DCDCDC"),   # grey
+    "4/4/4": _hex_rgb("#D8F596"),   # green
+}
+
 # ── Opening sash ("swing") ──────────────────────────────────────────────
 # Real-world sizes in mm, measured from the reference drawings. They're
 # in mm (not a ratio of the window size) because the references show the
