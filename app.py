@@ -1015,6 +1015,44 @@ elif st.session_state.active_view == 'Quote Estimator':
         st.session_state[f"window_diagram_three_{pos}_mm"] = \
             st.session_state[f"window_diagram_panel_width_{pos}"]
 
+    # "Equal" panel widths: French doors and Double sliding are one panel
+    # holding TWO doors, so they count double. Then every door / pane comes
+    # out the same width, e.g. Fixed | Double sliding | Fixed on 5500 gives
+    # 1375 | 2750 | 1375 -- four 1375 leaves.
+    WINDOW_DOUBLE_TYPES = ("French doors", "Double sliding")
+
+    def window_current_type(pos):
+        """
+        A panel's type as currently chosen. Its dropdown's value is already
+        up to date in session state at the start of a run, even before the
+        dropdown is drawn (which happens after the widths are worked out).
+        """
+        return st.session_state.get(f"window_diagram_type_{pos}", panels[pos]["type"])
+
+    def window_equal_widths(positions, total_mm):
+        """
+        {position: width in whole mm} for "equal" widths, with double-door
+        panels counted twice. Adds up to total_mm exactly: the middle panel
+        (3 panels) or the right panel (2 panels) takes any rounding leftover.
+        """
+        units = {pos: 2 if window_current_type(pos) in WINDOW_DOUBLE_TYPES else 1
+                 for pos in positions}
+        total_units = sum(units.values())
+        widths = {pos: max(int(total_mm * units[pos] // total_units), 1) for pos in positions}
+        filler = "middle" if "middle" in positions else positions[-1]
+        widths[filler] = total_mm - sum(w for pos, w in widths.items() if pos != filler)
+        return widths
+
+    def _window_equalise_widths():
+        """
+        "Equalise widths" button: forget any widths typed in or slid to, so
+        the panels go back to equal (see window_equal_widths()). Panel types
+        and everything else stay as they are.
+        """
+        st.session_state["window_diagram_split_left_mm"] = None
+        st.session_state["window_diagram_three_left_mm"] = None
+        st.session_state["window_diagram_three_right_mm"] = None
+
     def _window_reset():
         """
         "Reset" button: every panel back to a plain Fixed panel (no bottom
@@ -1031,9 +1069,7 @@ elif st.session_state.active_view == 'Quote Estimator':
             st.session_state[f"window_diagram_handle_side_{pos}"] = handle
             st.session_state[f"window_diagram_slide_tilt_{pos}"] = "None"
         # Equal widths: halves (2 panels) or thirds (3 panels).
-        st.session_state["window_diagram_split_left_mm"] = None
-        st.session_state["window_diagram_three_left_mm"] = None
-        st.session_state["window_diagram_three_right_mm"] = None
+        _window_equalise_widths()
 
     def window_opening(panel):
         """
@@ -1095,6 +1131,12 @@ elif st.session_state.active_view == 'Quote Estimator':
         return st.session_state[key]
 
     with col_options:
+        st.button(
+            "Reset", key="window_diagram_reset", on_click=_window_reset,
+            help="Sets every panel back to Fixed and makes the panel widths equal. "
+                 "Keeps the number of panels and the overall size.",
+        )
+
         render_eyebrow("Size")
         # Starting sizes go through session state rather than value=, because
         # the Quote Estimator also sets these keys -- giving both makes
@@ -1114,13 +1156,15 @@ elif st.session_state.active_view == 'Quote Estimator':
         # Every panel needs at least 1 mm.
         panel_count = min(panel_count, max(int(window_width_mm), 1))
         positions = WINDOW_POSITIONS[panel_count]
-        st.button(
-            "Reset", key="window_diagram_reset", on_click=_window_reset,
-            help="Sets every panel back to Fixed and makes the panel widths equal. "
-                 "Keeps the number of panels and the overall size.",
-        )
 
         render_eyebrow("Panel options")
+        if panel_count > 1:
+            st.button(
+                "Equalise widths", key="window_diagram_equalise", on_click=_window_equalise_widths,
+                help="Makes the panel widths equal again (French doors and Double sliding "
+                     "count as two panels, so every door and pane ends up the same width). "
+                     "Panel types stay as they are.",
+            )
         window_widths_mm = None
         if panel_count == 1:
             window_panel_controls("left", positions, window_height_mm)
@@ -1132,19 +1176,23 @@ elif st.session_state.active_view == 'Quote Estimator':
                 if left_mm is None or not 1 <= left_mm <= window_width_mm - 1:
                     left_mm = None
                     st.session_state["window_diagram_split_left_mm"] = None
-                left_mm = window_width_mm // 2 if left_mm is None else int(left_mm)
+                if left_mm is None:
+                    left_mm = window_equal_widths(positions, window_width_mm)["left"]
+                left_mm = int(left_mm)
                 window_widths_mm = {"left": left_mm, "right": window_width_mm - left_mm}
             else:
-                # Side widths: the ones set in the width boxes, or thirds.
-                # Both back to thirds if the overall width has shrunk too far
-                # to leave the middle at least 1 mm.
-                third = window_width_mm // 3
+                # Side widths: the ones set in the width boxes, or equal
+                # (see window_equal_widths()). Both back to equal if the
+                # overall width has shrunk too far to leave the middle at
+                # least 1 mm.
+                equal_mm = window_equal_widths(positions, window_width_mm)
                 side_mm = {pos: st.session_state.get(f"window_diagram_three_{pos}_mm")
                            for pos in ("left", "right")}
-                side_mm = {pos: third if mm is None else int(mm) for pos, mm in side_mm.items()}
+                side_mm = {pos: equal_mm[pos] if mm is None else int(mm)
+                           for pos, mm in side_mm.items()}
                 if (min(side_mm.values()) < 1
                         or side_mm["left"] + side_mm["right"] > window_width_mm - 1):
-                    side_mm = {"left": third, "right": third}
+                    side_mm = {"left": equal_mm["left"], "right": equal_mm["right"]}
                     st.session_state["window_diagram_three_left_mm"] = None
                     st.session_state["window_diagram_three_right_mm"] = None
                 window_widths_mm = {
