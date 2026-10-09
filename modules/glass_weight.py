@@ -12,6 +12,17 @@ import fitz
 
 from .config import SHEET_ID, GLASS_DENSITY, get_google_credentials
 
+# Weight / area labels are stamped this far in from the page's right edge.
+STAMP_RIGHT_OFFSET = 90
+# A label needs at least this much clear space (points) after the text it
+# sits on. If the glass line's own text runs closer than this to where the
+# label goes, the label moves down to the next line in the same column --
+# see _stamp_baseline().
+STAMP_CLEAR_GAP = 4
+# How many lines below the glass line to try before giving up and stamping
+# on the glass line anyway (the old behaviour).
+STAMP_MAX_LINES_DOWN = 3
+
 
 @st.cache_data(ttl=300)
 def load_glass_lookup():
@@ -61,6 +72,7 @@ def extract_size_and_glass_lines(page):
     blocks       = page.get_text('dict')['blocks']
     size_entries = []
     glass_lines  = []
+    all_lines    = []   # every text line's position, for _stamp_baseline()
 
     for b in blocks:
         if 'lines' not in b:
@@ -68,6 +80,14 @@ def extract_size_and_glass_lines(page):
         for line in b['lines']:
             spans     = line['spans']
             full_text = ''.join(s['text'] for s in spans).strip()
+            if spans and full_text:
+                all_lines.append({
+                    'x0':     min(s['bbox'][0] for s in spans),
+                    'x1':     max(s['bbox'][2] for s in spans),
+                    'y_mid':  (spans[0]['bbox'][1] + spans[0]['bbox'][3]) / 2,
+                    'y_base': spans[0]['bbox'][1] + spans[0]['size'] * 0.85,
+                    'size':   spans[0]['size'],
+                })
 
             # Size line, e.g. "size (W x H): 1200 x 800"
             m = re.search(r'size \(W x H\):\s*(\d+)\s*x\s*(\d+)', full_text)
@@ -93,11 +113,71 @@ def extract_size_and_glass_lines(page):
                     'y_mid':       (bbox[1] + bbox[3]) / 2,
                     'y_base':      bbox[1] + last['size'] * 0.85,
                     'font_size':   last['size'],
+                    'x0':          min(s['bbox'][0] for s in spans),
                     'lhg_code':    lhg_code_found,
                     'lhg_matches': lhg_matches,   # full list: [] = none found, 2+ = ambiguous
                 })
 
+    # Every glass line gets the page's line positions, so the stamp can
+    # check whether it fits (see _stamp_baseline()).
+    for glass_line in glass_lines:
+        glass_line['page_lines'] = all_lines
+
     return size_entries, glass_lines
+
+
+def _row_right_edge(page_lines, y_mid, size, x_from):
+    """
+    Right-hand end of the text on the row at y_mid, counting only text
+    starting at or after x_from (the glass line's column) -- a PDF can
+    split one visible line into several pieces, so all pieces on the row
+    are included.
+    """
+    tolerance = size * 0.5
+    edges = [l['x1'] for l in page_lines
+             if abs(l['y_mid'] - y_mid) <= tolerance and l['x1'] > x_from]
+    return max(edges) if edges else x_from
+
+
+def _stamp_baseline(glass_line, stamp_x):
+    """
+    Baseline y for a label stamped at stamp_x next to this glass line.
+
+    Normally that's the glass line itself. But a long glass description
+    (e.g. 'Glass: LHG043_SMOOTH PN(26),6/4 (30) Fluted') can run under
+    where the label goes, so the two overlap. In that case the label goes
+    on the next line down in the same column instead (e.g. 'muntin: ...'),
+    at the same x -- checking each line in turn, up to
+    STAMP_MAX_LINES_DOWN lines, for one that ends before the label. If
+    none does, it stays on the glass line, as before.
+    """
+    page_lines = glass_line.get('page_lines')
+    if not page_lines:
+        return glass_line['y_base']
+    size = glass_line['font_size']
+    x_from = glass_line.get('x0', 0) - 5
+
+    def fits(y_mid, row_size):
+        return _row_right_edge(page_lines, y_mid, row_size, x_from) + STAMP_CLEAR_GAP <= stamp_x
+
+    if fits(glass_line['y_mid'], size):
+        return glass_line['y_base']
+
+    # The lines below, in the same column (starting about where the glass
+    # line starts), one per row, top to bottom.
+    below = sorted(
+        (l for l in page_lines
+         if l['y_mid'] > glass_line['y_mid'] + size * 0.5
+         and abs(l['x0'] - glass_line.get('x0', l['x0'])) <= 20),
+        key=lambda l: l['y_mid'])
+    rows = []
+    for l in below:
+        if not rows or l['y_mid'] - rows[-1]['y_mid'] > l['size'] * 0.5:
+            rows.append(l)
+    for row in rows[:STAMP_MAX_LINES_DOWN]:
+        if fits(row['y_mid'], row['size']):
+            return row['y_base']
+    return glass_line['y_base']
 
 
 def match_glass_to_size(glass_line, size_entries):
@@ -158,15 +238,17 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
 
         # Stamp the computed weight back onto the PDF next to the glass line
         stamp_text = f'[{weight:.1f} kg]'
+        stamp_x = page_width - STAMP_RIGHT_OFFSET
+        stamp_y = _stamp_baseline(glass_line, stamp_x)
         page.insert_text(
-            (page_width - 90, glass_line['y_base']),
+            (stamp_x, stamp_y),
             stamp_text,
             fontsize=glass_line['font_size'],
             fontname='helv',
             color=(0.0, 0.0, 0.0),
         )
         highlight_rect = _stamp_highlight_rect(
-            page_width - 90, glass_line['y_base'], stamp_text, glass_line['font_size']
+            stamp_x, stamp_y, stamp_text, glass_line['font_size']
         )
 
         return {
@@ -194,15 +276,17 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
     # No code found, OR a single code was found but isn't in glass_lookup —
     # fall back to stamping the area instead of a weight.
     stamp_text = f'[{area:.3f} m²]'
+    stamp_x = page_width - STAMP_RIGHT_OFFSET
+    stamp_y = _stamp_baseline(glass_line, stamp_x)
     page.insert_text(
-        (page_width - 90, glass_line['y_base']),
+        (stamp_x, stamp_y),
         stamp_text,
         fontsize=glass_line['font_size'],
         fontname='helv',
         color=(0.0, 0.0, 0.0),
     )
     highlight_rect = _stamp_highlight_rect(
-        page_width - 90, glass_line['y_base'], stamp_text, glass_line['font_size']
+        stamp_x, stamp_y, stamp_text, glass_line['font_size']
     )
     label = lhg_code if lhg_code else 'No LHG code'
     return {
