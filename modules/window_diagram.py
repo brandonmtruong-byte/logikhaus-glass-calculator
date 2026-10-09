@@ -65,9 +65,19 @@ def _hex_rgb(hex_code):
 # glass_color, e.g. draw_window_diagram(..., glass_color=GLASS_COLOURS["4/4"]).
 # To add a choice, add a line here -- the app's dropdowns list whatever
 # is in these two dicts, in this order.
+# Frame colours, named and ordered as in the wood finish colours table.
+# RAL 9016 (Traffic white) is RAL's own value; finishes without a RAL
+# number use their swatch colour from the table, except NAKEDWOOD, which
+# uses the frame colour in the reference window drawings.
 FRAME_COLOURS = {
-    "Pine": _hex_rgb("#F1DCB9"),
+    "MERAN WHITE": _hex_rgb("#F2F2ED"),   # RAL 9016 Traffic white
+    "WARMCLEAR":   _hex_rgb("#C05828"),   # Satin (swatch)
+    "OILED":       _hex_rgb("#F7AA3F"),   # oak only (swatch)
+    "PAINT":       _hex_rgb("#BCE2FF"),   # any RAL colour -- placeholder (swatch)
+    "PINE WHITE":  _hex_rgb("#F2F2ED"),   # RAL 9016 Traffic white
+    "NAKEDWOOD":   _hex_rgb("#F1DCB9"),   # Satin (AQUATOP 2600-69)
 }
+DEFAULT_FRAME = "NAKEDWOOD"   # the frame colour used before these choices existed
 GLASS_COLOURS = {
     "4/4":   _hex_rgb("#DCDCDC"),   # grey
     "4/4/4": _hex_rgb("#D8F596"),   # green

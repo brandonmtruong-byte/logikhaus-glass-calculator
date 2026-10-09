@@ -20,7 +20,7 @@ from modules.steps import (
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
-                                    FRAME_COLOURS, GLASS_COLOURS)
+                                    FRAME_COLOURS, GLASS_COLOURS, DEFAULT_FRAME)
 from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
@@ -1153,6 +1153,10 @@ elif st.session_state.active_view == 'Quote Estimator':
         # choices and colours live in window_diagram.py). Reset leaves these
         # as they are, like the size.
         render_eyebrow("Materials")
+        # Starts on NAKEDWOOD (also if an older choice, like "Pine", is
+        # still remembered from before the list changed).
+        if st.session_state.get("window_diagram_frame") not in FRAME_COLOURS:
+            st.session_state["window_diagram_frame"] = DEFAULT_FRAME
         col_frame, col_glass = st.columns(2)
         with col_frame:
             window_frame = st.selectbox("Frame", list(FRAME_COLOURS), key="window_diagram_frame")
