@@ -82,7 +82,7 @@ with st.sidebar:
     wait_s = st.session_state.pop("data_refresh_wait", None)
     if wait_s:
         st.toast(f"Data was refreshed less than a minute ago - try again in {wait_s} s. "
-                 "(Google limits how often the sheets can be read.)")
+                 "(Google limits how often the sheets can be read.)", icon="⏳")
 
 # ── View switcher ────────────────────────────────────────────────────────
 # Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
@@ -388,7 +388,7 @@ if st.session_state.active_view == 'PDF Modifier':
             st.rerun()
     else:
         st.markdown(
-            f'<div class="status-box">Hardware data is loading in the background '
+            f'<div class="status-box">⏳ Hardware data is loading in the background '
             f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
             unsafe_allow_html=True
         )
@@ -900,7 +900,10 @@ elif st.session_state.active_view == 'Quote Estimator':
         st.session_state["window_diagram_panels"] = {}
     panels = st.session_state["window_diagram_panels"]
     # Default handles face the middle, so neighbouring openers meet there.
-    for _pos, _handle in (("left", "Right"), ("middle", "Right"), ("right", "Left")):
+    # Default handle side per position: facing the middle, so neighbouring
+    # openers meet there.
+    WINDOW_DEFAULT_HANDLES = {"left": "Right", "middle": "Right", "right": "Left"}
+    for _pos, _handle in WINDOW_DEFAULT_HANDLES.items():
         panels.setdefault(_pos, {"type": "Fixed", "handle_side": _handle, "slide_tilt": "None"})
 
     # Fixed bottom section: default top height as a fraction of the window
@@ -1012,6 +1015,26 @@ elif st.session_state.active_view == 'Quote Estimator':
         st.session_state[f"window_diagram_three_{pos}_mm"] = \
             st.session_state[f"window_diagram_panel_width_{pos}"]
 
+    def _window_reset():
+        """
+        "Reset" button: every panel back to a plain Fixed panel (no bottom
+        section, default handle side and tilt), and the panel widths back
+        to equal. Keeps the number of panels and the overall width/height.
+        Runs as a button callback, i.e. before the widgets are drawn, so
+        it can set their values directly.
+        """
+        for pos, handle in WINDOW_DEFAULT_HANDLES.items():
+            panels[pos] = {"type": "Fixed", "handle_side": handle, "slide_tilt": "None",
+                           "bottom": False, "top_mm": None}
+            st.session_state[f"window_diagram_type_{pos}"] = "Fixed"
+            st.session_state[f"window_diagram_bottom_{pos}"] = False
+            st.session_state[f"window_diagram_handle_side_{pos}"] = handle
+            st.session_state[f"window_diagram_slide_tilt_{pos}"] = "None"
+        # Equal widths: halves (2 panels) or thirds (3 panels).
+        st.session_state["window_diagram_split_left_mm"] = None
+        st.session_state["window_diagram_three_left_mm"] = None
+        st.session_state["window_diagram_three_right_mm"] = None
+
     def window_opening(panel):
         """
         Drawing options for a panel (any type except the two-panel
@@ -1091,6 +1114,11 @@ elif st.session_state.active_view == 'Quote Estimator':
         # Every panel needs at least 1 mm.
         panel_count = min(panel_count, max(int(window_width_mm), 1))
         positions = WINDOW_POSITIONS[panel_count]
+        st.button(
+            "Reset", key="window_diagram_reset", on_click=_window_reset,
+            help="Sets every panel back to Fixed and makes the panel widths equal. "
+                 "Keeps the number of panels and the overall size.",
+        )
 
         render_eyebrow("Panel options")
         window_widths_mm = None
