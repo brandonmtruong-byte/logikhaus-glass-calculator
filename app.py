@@ -1131,11 +1131,11 @@ elif st.session_state.active_view == 'Quote Estimator':
         return st.session_state[key]
 
     with col_options:
-        st.button(
-            "Reset", key="window_diagram_reset", on_click=_window_reset,
-            help="Sets every panel back to Fixed and makes the panel widths equal. "
-                 "Keeps the number of panels and the overall size.",
-        )
+        col_btn, col_note = st.columns([1, 3], vertical_alignment="center")
+        with col_btn:
+            st.button("Reset", key="window_diagram_reset", on_click=_window_reset)
+        with col_note:
+            st.caption("All panels Fixed, equal widths.")
 
         render_eyebrow("Size")
         # Starting sizes go through session state rather than value=, because
@@ -1159,12 +1159,13 @@ elif st.session_state.active_view == 'Quote Estimator':
 
         render_eyebrow("Panel options")
         if panel_count > 1:
-            st.button(
-                "Equalise widths", key="window_diagram_equalise", on_click=_window_equalise_widths,
-                help="Makes the panel widths equal again (French doors and Double sliding "
-                     "count as two panels, so every door and pane ends up the same width). "
-                     "Panel types stay as they are.",
-            )
+            col_btn, col_note = st.columns([2, 3], vertical_alignment="center")
+            with col_btn:
+                st.button("Equalise widths", key="window_diagram_equalise",
+                          on_click=_window_equalise_widths)
+            with col_note:
+                # Double doors (French / Double sliding) count as two panels.
+                st.caption("Types kept. Double doors count as two.")
         window_widths_mm = None
         if panel_count == 1:
             window_panel_controls("left", positions, window_height_mm)
