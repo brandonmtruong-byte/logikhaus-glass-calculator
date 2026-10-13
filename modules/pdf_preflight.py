@@ -8,8 +8,20 @@ start of the line (e.g. after drawing a leading space). PDF editors that
 rewrite the page often treat it as a no-op and delete it, which shifts the
 rest of the line right and makes letters overlap.
 
-Each one is replaced with an explicit, absolute "Tm" (same position, same
-result on screen), which editors keep intact.
+Each one is replaced with "ET BT <same position> Tm": the text object
+is ended and a new one started at exactly the same spot (same result on
+screen). A bare replacement "Tm" isn't enough: PyMuPDF's own page
+rewriting (used by the Schedule Text Editor's find-and-replace) drops a
+Tm that repeats the line's starting position, even though the text drawn
+in between has moved the cursor -- so the line still shifted. A NEW text
+object always starts from the identity position, so its Tm can never be
+mistaken for a no-op, by PyMuPDF or by Acrobat. Text state (font, size,
+spacing, leading) carries over between text objects, so nothing else
+needs repeating.
+
+One exception: a text object can't be split in the middle of a
+marked-content section (BMC/BDC ... EMC) that started inside it, so in
+that case the plain "Tm" is used instead.
 
 Used two ways:
   - In the app: preflight_pdf_bytes() -- see steps.apply_preflight().
@@ -41,7 +53,8 @@ def mul(a, b):
 def process_stream(instructions):
     """
     Rewrite one page's content-stream instructions, replacing every
-    "0 0 Td" / "0 0 TD" with an absolute "Tm" at the same position.
+    "0 0 Td" / "0 0 TD" with "ET BT <same position> Tm" (or just the "Tm"
+    inside a marked-content section -- see the module docstring).
     Returns (new_instructions, number_replaced).
 
     Inline images and anything else that isn't a plain operator are
@@ -50,6 +63,9 @@ def process_stream(instructions):
     out, hits = [], 0
     tlm = [1, 0, 0, 1, 0, 0]
     leading = 0.0
+    # Marked-content sections opened inside the current text object and not
+    # yet closed. While any are open, the text object mustn't be split.
+    open_marked = 0
 
     def move(tx, ty):
         nonlocal tlm
@@ -60,6 +76,11 @@ def process_stream(instructions):
         name = str(op)
         if name == "BT":
             tlm = [1, 0, 0, 1, 0, 0]
+            open_marked = 0
+        elif name in ("BMC", "BDC"):
+            open_marked += 1
+        elif name == "EMC":
+            open_marked = max(open_marked - 1, 0)
         elif name == "Tm":
             tlm = [float(x) for x in operands]
         elif name == "TL":
@@ -68,6 +89,11 @@ def process_stream(instructions):
             tx, ty = float(operands[0]), float(operands[1])
             if tx == 0 and ty == 0:
                 hits += 1
+                if open_marked == 0:
+                    # End this text object and start a new one at the
+                    # same position (see the module docstring).
+                    out.append(([], Operator("ET")))
+                    out.append(([], Operator("BT")))
                 out.append((list(tlm), Operator("Tm")))  # same effect, absolute
                 if name == "TD":
                     out.append(([0], Operator("TL")))  # TD also sets leading = -ty
