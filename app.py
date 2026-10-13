@@ -16,7 +16,8 @@ from modules.certificate_creator import (
 from modules.lhh_image_lookup import get_hardware_loader
 from modules.steps import (
     STEP_ORDER, STEP_LABELS,
-    apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace, apply_hardware_schedule,
+    apply_preflight, apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
+    apply_hardware_schedule,
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
@@ -283,6 +284,21 @@ def render_hardware_schedule_preview(result, doc):
                 st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
 
 
+def render_preflight_preview(result):
+    fixed = result.get('fixed', {}) if result else {}
+    if not fixed:
+        st.markdown('<div class="status-box">No risky line resets found- the file was already '
+                    'safe to edit, so it was left unchanged.</div>', unsafe_allow_html=True)
+        return
+    total = sum(fixed.values())
+    st.markdown(f'<div class="status-box">Fixed {total} risky line reset{"s" if total != 1 else ""} '
+                f'on {len(fixed)} page{"s" if len(fixed) != 1 else ""}. The pages look exactly '
+                f'the same, but text can no longer shift when the file is edited.</div>',
+                unsafe_allow_html=True)
+    st.dataframe([{"Page": page, "Line resets fixed": hits} for page, hits in fixed.items()],
+                 hide_index=True, use_container_width=True)
+
+
 def render_legend_preview(status):
     if status == 'added':
         st.markdown('<div class="status-box">✓ Legend page appended to end of quote</div>', unsafe_allow_html=True)
@@ -520,7 +536,14 @@ if st.session_state.active_view == 'PDF Modifier':
 
                 if apply_clicked:
                     with st.spinner(f'Applying {label}...'):
-                        if step_key == 'logo':
+                        if step_key == 'preflight':
+                            result = apply_preflight(doc)
+                            new_doc = result.pop('doc')
+                            if new_doc is not doc:
+                                doc.close()
+                            st.session_state.doc = new_doc
+                            st.session_state.step_results[step_key] = result
+                        elif step_key == 'logo':
                             apply_logo(doc)
                             st.session_state.step_results[step_key] = None
                         elif step_key == 'text_replace':
@@ -553,7 +576,9 @@ if st.session_state.active_view == 'PDF Modifier':
                 st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
 
                 with st.expander("View details", expanded=False):
-                    if step_key == 'logo':
+                    if step_key == 'preflight':
+                        render_preflight_preview(result)
+                    elif step_key == 'logo':
                         pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
                         st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
                     elif step_key == 'text_replace':

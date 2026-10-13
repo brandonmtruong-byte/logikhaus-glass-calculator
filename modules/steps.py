@@ -27,10 +27,14 @@ from .frame_code_matcher import process_frame_codes, group_rules_by_category
 from .legend_page import append_legend_page
 from .schedule_editor import apply_text_replace
 from .lhh_image_lookup import find_all_lhh_codes_in_doc, build_hardware_schedule
+from .pdf_preflight import preflight_pdf_bytes
 
-STEP_ORDER = ['logo', 'text_replace', 'mass', 'frame', 'hardware_schedule', 'legend']
+import fitz
+
+STEP_ORDER = ['preflight', 'logo', 'text_replace', 'mass', 'frame', 'hardware_schedule', 'legend']
 
 STEP_LABELS = {
+    'preflight':         'PDF Clean-up',
     'logo':              'Logo Stamp',
     'text_replace':      'Schedule Text Editor',
     'mass':              'Glass Weight Calculator',
@@ -38,6 +42,24 @@ STEP_LABELS = {
     'hardware_schedule': 'Hardware Schedule',
     'legend':            'Legend Page',
 }
+
+
+def apply_preflight(doc):
+    """
+    Step 1: clean the PDF before anything else edits it -- every
+    "0 0 TD" / "0 0 Td" text move becomes an equivalent absolute "Tm"
+    (see pdf_preflight.py), so later edits here or in Acrobat can't shift
+    text and make letters overlap. The page looks exactly the same.
+
+    Returns {'doc': the document to carry on with, 'fixed': {page_number:
+    number_replaced}}. Like apply_text_replace(), the cleaned file is a NEW
+    fitz.Document, which app.py swaps in for the old one; if nothing needed
+    fixing, the original document comes back as-is.
+    """
+    cleaned_bytes, fixed = preflight_pdf_bytes(doc.tobytes())
+    if not fixed:
+        return {'doc': doc, 'fixed': {}}
+    return {'doc': fitz.open(stream=cleaned_bytes, filetype="pdf"), 'fixed': fixed}
 
 
 def apply_logo(doc):
