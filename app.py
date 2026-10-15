@@ -21,7 +21,9 @@ from modules.steps import (
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
-                                    FRAME_COLOURS, GLASS_COLOURS, DEFAULT_FRAME)
+                                    FRAME_COLOURS, DEFAULT_FRAME, GLASS_COLOURS,
+                                    GLASS_PANE_WIDTHS, GLASS_TYPES, glass_colour,
+                                    glass_label_text)
 from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
@@ -1182,11 +1184,30 @@ elif st.session_state.active_view == 'Quote Estimator':
         # still remembered from before the list changed).
         if st.session_state.get("window_diagram_frame") not in FRAME_COLOURS:
             st.session_state["window_diagram_frame"] = DEFAULT_FRAME
-        col_frame, col_glass = st.columns(2)
-        with col_frame:
-            window_frame = st.selectbox("Frame", list(FRAME_COLOURS), key="window_diagram_frame")
-        with col_glass:
-            window_glass = st.selectbox("Glass", list(GLASS_COLOURS), key="window_diagram_glass")
+        window_frame = st.selectbox("Frame", list(FRAME_COLOURS), key="window_diagram_frame")
+
+        # Glass: one dropdown per pane width, so e.g. 6/6/6 can become 4/6/6
+        # by changing just the first one ("–" in the third = double glazing),
+        # plus the glass type, which is printed next to the window. The
+        # colour comes from the widths (see GLASS_COLOURS in window_diagram.py).
+        col_p1, col_p2, col_p3, col_type = st.columns([1, 1, 1, 2])
+        with col_p1:
+            pane_1 = st.selectbox("Glass (mm)", GLASS_PANE_WIDTHS, key="window_diagram_glass_1")
+        with col_p2:
+            pane_2 = st.selectbox("Pane 2", GLASS_PANE_WIDTHS, key="window_diagram_glass_2",
+                                  label_visibility="hidden")
+        with col_p3:
+            pane_3 = st.selectbox("Pane 3", ["–"] + GLASS_PANE_WIDTHS, key="window_diagram_glass_3",
+                                  label_visibility="hidden")
+        with col_type:
+            glass_type = st.selectbox("Type", ["None"] + GLASS_TYPES, key="window_diagram_glass_type")
+        window_glass_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
+        window_glass_colour = glass_colour(window_glass_widths)
+        window_glass_label = glass_label_text(window_glass_widths,
+                                              None if glass_type == "None" else glass_type)
+        if window_glass_widths not in GLASS_COLOURS:
+            st.caption(f"{window_glass_widths} has no colour of its own yet, so it's drawn in "
+                       f"the fallback colour and its widths are printed on the drawing.")
 
         render_eyebrow("Panels")
         panel_count = st.radio(
@@ -1393,7 +1414,7 @@ elif st.session_state.active_view == 'Quote Estimator':
                 # no network/file I/O involved, so it just redraws on every change.
                 diagram_png = draw_window_diagram(window_width_mm, window_height_mm,
                                                   frame_color=FRAME_COLOURS[window_frame],
-                                                  glass_color=GLASS_COLOURS[window_glass],
+                                                  glass_color=window_glass_colour, glass_label=window_glass_label,
                                                   **diagram_options)
 
                 # Fit the diagram inside a max width (half the page) AND a max
@@ -1412,7 +1433,7 @@ elif st.session_state.active_view == 'Quote Estimator':
                 diagram_pdf = draw_window_diagram_pdf(
                     window_width_mm, window_height_mm,
                     frame_color=FRAME_COLOURS[window_frame],
-                    glass_color=GLASS_COLOURS[window_glass],
+                    glass_color=window_glass_colour, glass_label=window_glass_label,
                     **diagram_options
                 )
                 st.download_button(

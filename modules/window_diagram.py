@@ -35,6 +35,7 @@ TOTAL_DIM_GAP = 40    # split windows: extra gap down to the overall-width line
 TOTAL_HEIGHT_DIM_GAP = 75
 DIM_TICK      = 8     # length of the little end-ticks on dimension lines
 LABEL_FONTSIZE = 16
+GLASS_LABEL_FONTSIZE = 13   # the glass type label above the window
 
 # PDF export (draw_window_diagram_pdf): blank border around the diagram
 # on the page, in points (72 pt = 1 inch, so 40 pt is about 14 mm).
@@ -78,10 +79,51 @@ FRAME_COLOURS = {
     "NAKEDWOOD":   _hex_rgb("#F1DCB9"),   # Satin (AQUATOP 2600-69)
 }
 DEFAULT_FRAME = "NAKEDWOOD"   # the frame colour used before these choices existed
+# Glass colours, by pane widths in mm ("4/4" = double glazing with two 4 mm
+# panes, "6/4/4" = triple glazing). Every glass type with the same widths
+# shares one colour -- e.g. LHG006, LHG020 SB, LHG031 CN, LHG059 ECL are all
+# 6/6/6 -- and the type (ECL, CN, SB, ...) is printed as text next to the
+# window instead (see glass_label in draw_window_diagram()). These 7 are
+# the width combinations in the glass list; they were chosen to stay
+# clearly distinct from each other (also for red-green colour blindness),
+# keep the drawing lines readable, and not look like a frame finish.
 GLASS_COLOURS = {
     "4/4":   _hex_rgb("#DCDCDC"),   # grey
+    "6/6":   _hex_rgb("#00AAEE"),   # blue
+    "8/8":   _hex_rgb("#00BBAA"),   # teal
     "4/4/4": _hex_rgb("#D8F596"),   # green
+    "6/4/4": _hex_rgb("#DD8888"),   # rose
+    "6/6/6": _hex_rgb("#FFAAFF"),   # pink
+    "8/8/8": _hex_rgb("#CCAA00"),   # mustard
 }
+# Any other width combination (e.g. 4/6/6) is drawn in this colour, and its
+# widths are added to the label so the drawing still says what it is.
+GLASS_OTHER_COLOUR = _hex_rgb("#00BB00")
+
+# Choices for the app's glass selectors: one pane width per dropdown, and
+# the extra glass type printed next to the window.
+GLASS_PANE_WIDTHS = ["4", "6", "8"]
+GLASS_TYPES = ["CN", "SB", "ORN", "ECL", "CN+SB", "CN+ORN", "HST", "SMOOTH PN", "VAR-PN"]
+
+
+def glass_colour(widths):
+    """Colour for a pane-width combination like "6/6/6" (GLASS_OTHER_COLOUR if it has none)."""
+    return GLASS_COLOURS.get(widths, GLASS_OTHER_COLOUR)
+
+
+def glass_label_text(widths, glass_type=None):
+    """
+    The glass label printed next to the window: the glass type (e.g.
+    "ECL"), with the widths in front when they have no colour of their
+    own (e.g. "4/6/6 ECL", or just "4/6/6"). None when there's nothing
+    to print.
+    """
+    parts = []
+    if widths not in GLASS_COLOURS:
+        parts.append(widths)
+    if glass_type:
+        parts.append(glass_type)
+    return " ".join(parts) or None
 
 # ── Opening sash ("swing") ──────────────────────────────────────────────
 # Real-world sizes in mm, measured from the reference drawings. They're
@@ -160,7 +202,7 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
                         tilt=False, split=False, swing_2=False, handle_side_2='left',
                         tilt_2=False, tilt_only=False, tilt_only_2=False,
                         slide=False, slide_side='left', split_left_mm=None,
-                        panels=None, panel_widths_mm=None):
+                        panels=None, panel_widths_mm=None, glass_label=None):
     """
     Returns PNG bytes for a to-scale window diagram (the on-screen preview).
 
@@ -223,6 +265,9 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
         equal halves meeting in the middle, each sliding OUTWARD (arrows
         pointing away from the middle) over the panel beside it. No
         handles; the other opening options are ignored.
+    glass_label: text printed just above the window's top-left corner,
+        e.g. the glass type "ECL" (see glass_label_text()). None prints
+        nothing.
     panel_widths_mm: each panel's width in mm, left to right, matching
         panels; they must add up to width_mm. None (the default) makes
         the panels equal.
@@ -231,7 +276,7 @@ def draw_window_diagram(width_mm, height_mm, frame_color=FRAME_COLOR, glass_colo
                              _pane_options(swing, handle_side, tilt, tilt_only, split,
                                            swing_2, handle_side_2, tilt_2, tilt_only_2,
                                            slide, slide_side, panels),
-                             split_left_mm, panel_widths_mm)
+                             split_left_mm, panel_widths_mm, glass_label)
     pix = doc[0].get_pixmap(dpi=dpi)
     png_bytes = pix.tobytes('png')
     doc.close()
@@ -243,7 +288,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
                             tilt=False, split=False, swing_2=False, handle_side_2='left',
                             tilt_2=False, tilt_only=False, tilt_only_2=False,
                             slide=False, slide_side='left', split_left_mm=None,
-                            panels=None, panel_widths_mm=None,
+                            panels=None, panel_widths_mm=None, glass_label=None,
                             paper='a4', page_margin_pt=PDF_PAGE_MARGIN_PT):
     """
     Returns PDF bytes: the same diagram as draw_window_diagram(), placed
@@ -263,7 +308,7 @@ def draw_window_diagram_pdf(width_mm, height_mm, frame_color=FRAME_COLOR, glass_
                                  _pane_options(swing, handle_side, tilt, tilt_only, split,
                                                swing_2, handle_side_2, tilt_2, tilt_only_2,
                                                slide, slide_side, panels),
-                                 split_left_mm, panel_widths_mm)
+                                 split_left_mm, panel_widths_mm, glass_label)
     diagram_rect = diagram[0].rect
 
     paper_rect = fitz.paper_rect(paper)
@@ -334,7 +379,7 @@ def _format_mm(value):
 
 
 def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margin_mm, panes,
-                       split_left_mm=None, panel_widths_mm=None):
+                       split_left_mm=None, panel_widths_mm=None, glass_label=None):
     """
     Draw the diagram onto a new one-page fitz.Document and return it.
     Shared by draw_window_diagram() (PNG preview) and
@@ -504,6 +549,11 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
                               dim_color)
         dim_y += TOTAL_DIM_GAP
     _draw_width_dimension(page, [x0, x1], dim_y, [str(int(round(width_mm)))], dim_color)
+
+    # Glass label: just above the window's top-left corner, in the margin.
+    if glass_label:
+        page.insert_text((x0, y0 - 8), glass_label, fontsize=GLASS_LABEL_FONTSIZE,
+                          color=(0.1, 0.1, 0.1))
 
     # Height dimension lines (right). Each different fixed-bottom-section
     # top height gets a line of its own showing its top and bottom heights,
