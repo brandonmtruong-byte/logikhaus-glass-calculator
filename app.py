@@ -23,7 +23,7 @@ from modules.xero_invoice_creator import extract_windows_quote_info, extract_bli
 from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
                                     FRAME_COLOURS, DEFAULT_FRAME, GLASS_COLOURS,
                                     GLASS_PANE_WIDTHS, GLASS_TYPES, glass_colour,
-                                    glass_label_text, glass_exists)
+                                    glass_label_text, glass_exists, GLASS_COMBINATIONS)
 from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
@@ -1232,7 +1232,25 @@ elif st.session_state.active_view == 'Quote Estimator':
         with cols[4]:
             pane_3 = window_pane_buttons("window_diagram_glass_3", ["–"] + GLASS_PANE_WIDTHS,
                                          "Pane 3 (mm)")
-        glass_type = st.selectbox("Type", ["None"] + GLASS_TYPES, key="window_diagram_glass_type")
+        # Type: only the types these widths come in (GLASS_COMBINATIONS in
+        # window_diagram.py), in the usual order. Widths that aren't in the
+        # glass list at all have no known types, so every type stays on offer
+        # (the not-in-the-list warning below covers those).
+        chosen_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
+        if chosen_widths in GLASS_COMBINATIONS:
+            available = GLASS_COMBINATIONS[chosen_widths]
+            type_options = (["None"] if "" in available else []) + \
+                           [t for t in GLASS_TYPES if t in available]
+        else:
+            type_options = ["None"] + GLASS_TYPES
+        # A type picked earlier that these widths don't come in goes back to
+        # the first option ("None"), with a pop-up saying so.
+        previous_type = st.session_state.get("window_diagram_glass_type")
+        if previous_type is not None and previous_type not in type_options:
+            st.session_state["window_diagram_glass_type"] = type_options[0]
+            st.toast(f"{chosen_widths} doesn't come in {previous_type}, so Type is now "
+                     f"{type_options[0]}.", icon="ℹ️")
+        glass_type = st.selectbox("Type", type_options, key="window_diagram_glass_type")
         window_glass_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
         window_glass_type = None if glass_type == "None" else glass_type
         window_glass_colour = glass_colour(window_glass_widths)
