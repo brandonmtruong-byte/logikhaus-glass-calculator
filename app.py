@@ -1190,14 +1190,12 @@ elif st.session_state.active_view == 'Quote Estimator':
         # by changing just the first one ("–" in the third = double glazing),
         # plus the glass type, which is printed next to the window. The
         # colour comes from the widths (see GLASS_COLOURS in window_diagram.py).
-        # Starts on 4/4/4. The width dropdowns' arrows sit under the number
-        # (the "window_diagram_glass_1/2/3" rules in styles.py), so the boxes
-        # are narrow, with a "/" between each one.
+        # Starts on 4/4/4, with a "/" between the width boxes.
         st.session_state.setdefault("window_diagram_glass_1", "4")
         st.session_state.setdefault("window_diagram_glass_2", "4")
         st.session_state.setdefault("window_diagram_glass_3", "4")
-        GLASS_ROW = [1, 0.35, 1, 0.35, 1, 0.3, 3]   # box / box / box  (gap)  type
-        col_glass_head, _, col_type_head = st.columns([4.05, 0.3, 3])
+        GLASS_ROW = [1.4, 0.3, 1.4, 0.3, 1.4, 0.2, 2.2]   # box / box / box  (gap)  type
+        col_glass_head, _, col_type_head = st.columns([4.8, 0.2, 2.2])
         col_glass_head.markdown('<div class="lh-field-label">Glass (mm)</div>', unsafe_allow_html=True)
         col_type_head.markdown('<div class="lh-field-label">Type</div>', unsafe_allow_html=True)
         cols = st.columns(GLASS_ROW, vertical_alignment="center")

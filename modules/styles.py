@@ -221,40 +221,12 @@ CUSTOM_CSS = """
         display: none !important;
     }
 
-    /* Quote Estimator glass widths: the three pane-width dropdowns
-       (keys window_diagram_glass_1/2/3) show their arrow UNDER the number
-       instead of beside it, so the boxes can be narrow and sit close
-       together, with a "/" between them like a glass spec (4/4/4). */
-    div[class*="st-key-window_diagram_glass_1"] div[data-baseweb="select"] > div,
-    div[class*="st-key-window_diagram_glass_2"] div[data-baseweb="select"] > div,
-    div[class*="st-key-window_diagram_glass_3"] div[data-baseweb="select"] > div {
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
-        padding: 4px 0 2px 0 !important;
-        min-height: 0 !important;
-    }
-    div[class*="st-key-window_diagram_glass_1"] div[data-baseweb="select"] > div > div,
-    div[class*="st-key-window_diagram_glass_2"] div[data-baseweb="select"] > div > div,
-    div[class*="st-key-window_diagram_glass_3"] div[data-baseweb="select"] > div > div {
-        padding: 0 !important;
-        margin: 0 !important;
-        justify-content: center !important;
-        text-align: center !important;
-        flex: 0 0 auto !important;
-        width: auto !important;
-    }
-    div[class*="st-key-window_diagram_glass_1"] div[data-baseweb="select"] svg,
-    div[class*="st-key-window_diagram_glass_2"] div[data-baseweb="select"] svg,
-    div[class*="st-key-window_diagram_glass_3"] div[data-baseweb="select"] svg {
-        width: 16px !important;
-        height: 16px !important;
-        margin-top: -4px;
-    }
     /* The "/" between the glass width boxes. */
     .lh-glass-slash {
         text-align: center;
         font-size: 1.4rem;
+        line-height: 1;
+        margin-top: -0.35rem;   /* the "/" otherwise sits slightly below the boxes' middle */
         color: inherit;
         opacity: 0.7;
     }
