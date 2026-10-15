@@ -221,6 +221,17 @@ CUSTOM_CSS = """
         display: none !important;
     }
 
+    /* Quote Estimator glass widths: each pane is a row of buttons
+       ([4][6][8]). Slightly tighter padding than Streamlit's default, so
+       all three rows fit side by side in the options column. */
+    div[class*="st-key-window_diagram_glass_1"] button,
+    div[class*="st-key-window_diagram_glass_2"] button,
+    div[class*="st-key-window_diagram_glass_3"] button {
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
+        min-width: 0 !important;
+    }
+
     /* The "/" between the glass width boxes. */
     .lh-glass-slash {
         text-align: center;

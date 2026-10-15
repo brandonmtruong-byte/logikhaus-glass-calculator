@@ -1186,35 +1186,53 @@ elif st.session_state.active_view == 'Quote Estimator':
             st.session_state["window_diagram_frame"] = DEFAULT_FRAME
         window_frame = st.selectbox("Frame", list(FRAME_COLOURS), key="window_diagram_frame")
 
-        # Glass: one dropdown per pane width, so e.g. 6/6/6 can become 4/6/6
-        # by changing just the first one ("–" in the third = double glazing),
-        # plus the glass type, which is printed next to the window. The
-        # colour comes from the widths (see GLASS_COLOURS in window_diagram.py).
-        # Starts on 4/4/4, with a "/" between the width boxes.
+        # Glass: one row of buttons per pane width ([4][6][8]; the third pane
+        # also has [–] = double glazing), so e.g. 6/6/6 becomes 4/6/6 with one
+        # click on the first row. A "/" sits between the rows of buttons. The
+        # glass type is a dropdown underneath, printed next to the window.
+        # The colour comes from the widths (GLASS_COLOURS in window_diagram.py).
+        # Starts on 4/4/4.
         st.session_state.setdefault("window_diagram_glass_1", "4")
         st.session_state.setdefault("window_diagram_glass_2", "4")
         st.session_state.setdefault("window_diagram_glass_3", "4")
-        GLASS_ROW = [1.4, 0.3, 1.4, 0.3, 1.4, 0.2, 2.2]   # box / box / box  (gap)  type
-        col_glass_head, _, col_type_head = st.columns([4.8, 0.2, 2.2])
-        col_glass_head.markdown('<div class="lh-field-label">Glass (mm)</div>', unsafe_allow_html=True)
-        col_type_head.markdown('<div class="lh-field-label">Type</div>', unsafe_allow_html=True)
-        cols = st.columns(GLASS_ROW, vertical_alignment="center")
+
+        def _keep_pane_selected(key, fallback):
+            """
+            A segmented control can be clicked OFF (no button selected). A
+            pane always needs a width, so clicking the selected button again
+            just leaves it selected.
+            """
+            if st.session_state.get(key) is None:
+                st.session_state[key] = st.session_state.get(f"{key}__last", fallback)
+            st.session_state[f"{key}__last"] = st.session_state[key]
+
+        def window_pane_buttons(key, options, label):
+            """One pane's width buttons (st.radio on Streamlit versions without them)."""
+            st.session_state.setdefault(f"{key}__last", st.session_state[key])
+            if hasattr(st, "segmented_control"):
+                value = st.segmented_control(
+                    label, options, key=key, label_visibility="collapsed",
+                    on_change=_keep_pane_selected, args=(key, options[0]),
+                )
+            else:
+                value = st.radio(label, options, key=key, horizontal=True,
+                                 label_visibility="collapsed")
+            return value or st.session_state.get(f"{key}__last", options[0])
+
+        st.markdown('<div class="lh-field-label">Glass (mm)</div>', unsafe_allow_html=True)
+        cols = st.columns([3, 0.4, 3, 0.4, 4], vertical_alignment="center")
         with cols[0]:
-            pane_1 = st.selectbox("Pane 1 (mm)", GLASS_PANE_WIDTHS, key="window_diagram_glass_1",
-                                  label_visibility="collapsed")
+            pane_1 = window_pane_buttons("window_diagram_glass_1", GLASS_PANE_WIDTHS, "Pane 1 (mm)")
         with cols[1]:
             st.markdown('<div class="lh-glass-slash">/</div>', unsafe_allow_html=True)
         with cols[2]:
-            pane_2 = st.selectbox("Pane 2 (mm)", GLASS_PANE_WIDTHS, key="window_diagram_glass_2",
-                                  label_visibility="collapsed")
+            pane_2 = window_pane_buttons("window_diagram_glass_2", GLASS_PANE_WIDTHS, "Pane 2 (mm)")
         with cols[3]:
             st.markdown('<div class="lh-glass-slash">/</div>', unsafe_allow_html=True)
         with cols[4]:
-            pane_3 = st.selectbox("Pane 3 (mm)", ["–"] + GLASS_PANE_WIDTHS, key="window_diagram_glass_3",
-                                  label_visibility="collapsed")
-        with cols[6]:
-            glass_type = st.selectbox("Type", ["None"] + GLASS_TYPES, key="window_diagram_glass_type",
-                                      label_visibility="collapsed")
+            pane_3 = window_pane_buttons("window_diagram_glass_3", ["–"] + GLASS_PANE_WIDTHS,
+                                         "Pane 3 (mm)")
+        glass_type = st.selectbox("Type", ["None"] + GLASS_TYPES, key="window_diagram_glass_type")
         window_glass_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
         window_glass_type = None if glass_type == "None" else glass_type
         window_glass_colour = glass_colour(window_glass_widths)
