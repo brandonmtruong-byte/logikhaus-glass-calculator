@@ -23,12 +23,12 @@ from modules.xero_invoice_creator import extract_windows_quote_info, extract_bli
 from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
                                     FRAME_COLOURS, DEFAULT_FRAME, GLASS_COLOURS,
                                     GLASS_PANE_WIDTHS, GLASS_TYPES, glass_colour,
-                                    glass_label_text)
+                                    glass_label_text, glass_exists)
 from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Logikhaus PDF Fixr Tool",
+    page_title="Logikhaus PDF Fixr",
     page_icon="🪟",
     layout="centered"
 )
@@ -1190,24 +1190,53 @@ elif st.session_state.active_view == 'Quote Estimator':
         # by changing just the first one ("–" in the third = double glazing),
         # plus the glass type, which is printed next to the window. The
         # colour comes from the widths (see GLASS_COLOURS in window_diagram.py).
-        col_p1, col_p2, col_p3, col_type = st.columns([1, 1, 1, 2])
-        with col_p1:
-            pane_1 = st.selectbox("Glass (mm)", GLASS_PANE_WIDTHS, key="window_diagram_glass_1")
-        with col_p2:
-            pane_2 = st.selectbox("Pane 2", GLASS_PANE_WIDTHS, key="window_diagram_glass_2",
-                                  label_visibility="hidden")
-        with col_p3:
-            pane_3 = st.selectbox("Pane 3", ["–"] + GLASS_PANE_WIDTHS, key="window_diagram_glass_3",
-                                  label_visibility="hidden")
-        with col_type:
-            glass_type = st.selectbox("Type", ["None"] + GLASS_TYPES, key="window_diagram_glass_type")
+        # Starts on 4/4/4. The width dropdowns' arrows sit under the number
+        # (the "window_diagram_glass_1/2/3" rules in styles.py), so the boxes
+        # are narrow, with a "/" between each one.
+        st.session_state.setdefault("window_diagram_glass_1", "4")
+        st.session_state.setdefault("window_diagram_glass_2", "4")
+        st.session_state.setdefault("window_diagram_glass_3", "4")
+        GLASS_ROW = [1, 0.35, 1, 0.35, 1, 0.3, 3]   # box / box / box  (gap)  type
+        col_glass_head, _, col_type_head = st.columns([4.05, 0.3, 3])
+        col_glass_head.markdown('<div class="lh-field-label">Glass (mm)</div>', unsafe_allow_html=True)
+        col_type_head.markdown('<div class="lh-field-label">Type</div>', unsafe_allow_html=True)
+        cols = st.columns(GLASS_ROW, vertical_alignment="center")
+        with cols[0]:
+            pane_1 = st.selectbox("Pane 1 (mm)", GLASS_PANE_WIDTHS, key="window_diagram_glass_1",
+                                  label_visibility="collapsed")
+        with cols[1]:
+            st.markdown('<div class="lh-glass-slash">/</div>', unsafe_allow_html=True)
+        with cols[2]:
+            pane_2 = st.selectbox("Pane 2 (mm)", GLASS_PANE_WIDTHS, key="window_diagram_glass_2",
+                                  label_visibility="collapsed")
+        with cols[3]:
+            st.markdown('<div class="lh-glass-slash">/</div>', unsafe_allow_html=True)
+        with cols[4]:
+            pane_3 = st.selectbox("Pane 3 (mm)", ["–"] + GLASS_PANE_WIDTHS, key="window_diagram_glass_3",
+                                  label_visibility="collapsed")
+        with cols[6]:
+            glass_type = st.selectbox("Type", ["None"] + GLASS_TYPES, key="window_diagram_glass_type",
+                                      label_visibility="collapsed")
         window_glass_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
+        window_glass_type = None if glass_type == "None" else glass_type
         window_glass_colour = glass_colour(window_glass_widths)
-        window_glass_label = glass_label_text(window_glass_widths,
-                                              None if glass_type == "None" else glass_type)
-        if window_glass_widths not in GLASS_COLOURS:
-            st.caption(f"{window_glass_widths} has no colour of its own yet, so it's drawn in "
-                       f"the fallback colour and its widths are printed on the drawing.")
+        window_glass_label = glass_label_text(window_glass_widths, window_glass_type)
+
+        # Glass that isn't in the glass list: a pop-up when it's first
+        # picked (not on every rerun), plus a note that stays while it's
+        # selected. It's still drawn -- in the fallback colour if the
+        # widths have no colour of their own.
+        glass_problem = glass_exists(window_glass_widths, window_glass_type)
+        if glass_problem:
+            glass_choice = (window_glass_widths, window_glass_type)
+            if st.session_state.get("window_diagram_glass_warned") != glass_choice:
+                st.toast(f"{glass_problem}.", icon="⚠️")
+                st.session_state["window_diagram_glass_warned"] = glass_choice
+            st.caption(f"⚠️ {glass_problem}."
+                       + ("" if window_glass_widths in GLASS_COLOURS else
+                          " It's drawn in the fallback colour, with its widths printed on the drawing."))
+        else:
+            st.session_state["window_diagram_glass_warned"] = None
 
         render_eyebrow("Panels")
         panel_count = st.radio(

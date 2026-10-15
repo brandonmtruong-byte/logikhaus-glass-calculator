@@ -221,6 +221,51 @@ CUSTOM_CSS = """
         display: none !important;
     }
 
+    /* Quote Estimator glass widths: the three pane-width dropdowns
+       (keys window_diagram_glass_1/2/3) show their arrow UNDER the number
+       instead of beside it, so the boxes can be narrow and sit close
+       together, with a "/" between them like a glass spec (4/4/4). */
+    div[class*="st-key-window_diagram_glass_1"] div[data-baseweb="select"] > div,
+    div[class*="st-key-window_diagram_glass_2"] div[data-baseweb="select"] > div,
+    div[class*="st-key-window_diagram_glass_3"] div[data-baseweb="select"] > div {
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 4px 0 2px 0 !important;
+        min-height: 0 !important;
+    }
+    div[class*="st-key-window_diagram_glass_1"] div[data-baseweb="select"] > div > div,
+    div[class*="st-key-window_diagram_glass_2"] div[data-baseweb="select"] > div > div,
+    div[class*="st-key-window_diagram_glass_3"] div[data-baseweb="select"] > div > div {
+        padding: 0 !important;
+        margin: 0 !important;
+        justify-content: center !important;
+        text-align: center !important;
+        flex: 0 0 auto !important;
+        width: auto !important;
+    }
+    div[class*="st-key-window_diagram_glass_1"] div[data-baseweb="select"] svg,
+    div[class*="st-key-window_diagram_glass_2"] div[data-baseweb="select"] svg,
+    div[class*="st-key-window_diagram_glass_3"] div[data-baseweb="select"] svg {
+        width: 16px !important;
+        height: 16px !important;
+        margin-top: -4px;
+    }
+    /* The "/" between the glass width boxes. */
+    .lh-glass-slash {
+        text-align: center;
+        font-size: 1.4rem;
+        color: inherit;
+        opacity: 0.7;
+    }
+    /* A label in Streamlit's own label style, for a row of widgets that
+       share one label (e.g. "Glass (mm)" above the three width boxes). */
+    .lh-field-label {
+        font-size: 0.875rem;
+        color: inherit;
+        margin-bottom: 0.25rem;
+    }
+
     div[data-testid="stColumn"]:has(div[class*="st-key-window_diagram_panel"]),
     div[data-testid="column"]:has(div[class*="st-key-window_diagram_panel"]) {
         position: sticky;
@@ -243,7 +288,7 @@ def render_header():
     with col_title:
         st.markdown("""
         <div style="padding-top: 1rem;">
-            <div class="lh-title">PDF Fixr</div>
+            <div class="lh-title">Glass Weight Calculator</div>
             <div class="lh-sub">Logikhaus Pty Ltd - internal tool</div>
         </div>
         """, unsafe_allow_html=True)

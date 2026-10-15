@@ -103,12 +103,38 @@ GLASS_OTHER_COLOUR = _hex_rgb("#00BB00")
 # Choices for the app's glass selectors: one pane width per dropdown, and
 # the extra glass type printed next to the window.
 GLASS_PANE_WIDTHS = ["4", "6", "8"]
-GLASS_TYPES = ["CN", "SB", "ORN", "ECL", "CN+SB", "CN+ORN", "HST", "SMOOTH PN", "VAR-PN"]
+GLASS_TYPES = ["CN", "SB", "ORN", "ECL", "CN+SB", "CN+ORN", "HST", "HS", "SMOOTH PN", "VAR-PN"]
+
+# The glass that actually exists, from the glass list: each width
+# combination and the types it comes in ("" = plain, no type). +30% / +50%
+# / +80% variants count as their base type. LHG014 (47DB) doesn't give pane
+# widths, so it isn't listed here.
+GLASS_COMBINATIONS = {
+    "4/4":   {"", "CN", "CN+ORN", "CN+SB", "ECL", "ORN", "SB", "SMOOTH PN", "VAR-PN"},
+    "6/6":   {"", "CN", "ECL", "SB"},
+    "8/8":   {"", "CN", "HS", "HST"},
+    "4/4/4": {"", "CN", "ECL", "ORN", "SB", "SMOOTH PN", "VAR-PN"},
+    "6/4/4": {"", "CN", "ECL", "ORN", "SB"},
+    "6/6/6": {"", "CN", "ECL", "SB"},
+    "8/8/8": {""},
+}
 
 
 def glass_colour(widths):
     """Colour for a pane-width combination like "6/6/6" (GLASS_OTHER_COLOUR if it has none)."""
     return GLASS_COLOURS.get(widths, GLASS_OTHER_COLOUR)
+
+
+def glass_exists(widths, glass_type=None):
+    """
+    None if this glass is in the glass list, otherwise a short reason,
+    e.g. "4/6/6 isn't in the glass list" or "8/8/8 doesn't come in ECL".
+    """
+    if widths not in GLASS_COMBINATIONS:
+        return f"{widths} isn't in the glass list"
+    if (glass_type or "") not in GLASS_COMBINATIONS[widths]:
+        return f"{widths} doesn't come in {glass_type}"
+    return None
 
 
 def glass_label_text(widths, glass_type=None):
