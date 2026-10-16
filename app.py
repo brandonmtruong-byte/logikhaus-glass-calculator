@@ -21,9 +21,11 @@ from modules.steps import (
 )
 from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
 from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
-                                    FRAME_COLOURS, DEFAULT_FRAME, GLASS_COLOURS,
-                                    GLASS_PANE_WIDTHS, GLASS_TYPES, glass_colour,
-                                    glass_label_text, glass_exists, GLASS_COMBINATIONS)
+                                    FRAME_COLOURS, DEFAULT_FRAME,
+                                    GLASS_PANE_WIDTHS, GLASS_TYPES, GLASS_COMBINATIONS,
+                                    GLASS_PATTERN_TYPES, GLASS_OTHER_COLOUR, GlassFill,
+                                    glass_codes_for, glass_fill_for_code,
+                                    glass_label_text, glass_exists)
 from modules.quote_estimator import render_quote_estimator
 
 # ── Page config ────────────────────────────────────────────────────────────
@@ -286,19 +288,24 @@ def render_hardware_schedule_preview(result, doc):
                 st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
 
 
-def render_preflight_preview(result):
-    fixed = result.get('fixed', {}) if result else {}
-    if not fixed:
-        st.markdown('<div class="status-box">No risky line resets found- the file was already '
-                    'safe to edit, so it was left unchanged.</div>', unsafe_allow_html=True)
+def render_preflight_status(result):
+    """One line under the upload: what the automatic PDF clean-up did."""
+    if not result:
         return
+    if result.get('error'):
+        st.warning("The automatic PDF clean-up couldn't process this file, so it's being used "
+                   "as uploaded. Text on lines the Schedule Text Editor doesn't change may "
+                   f"shift slightly. ({result['error']})")
+        return
+    fixed = result.get('fixed', {})
+    if not fixed:
+        return   # nothing needed fixing -- nothing to say
     total = sum(fixed.values())
-    st.markdown(f'<div class="status-box">Fixed {total} risky line reset{"s" if total != 1 else ""} '
-                f'on {len(fixed)} page{"s" if len(fixed) != 1 else ""}. The pages look exactly '
-                f'the same, but text can no longer shift when the file is edited.</div>',
+    pages = ", ".join(str(p) for p in fixed)
+    st.markdown(f'<div class="status-box">✓ PDF cleaned up automatically: fixed {total} risky line '
+                f'reset{"s" if total != 1 else ""} (page{"s" if len(fixed) != 1 else ""} {pages}), '
+                f'so edits will no longer shift text. The pages look exactly the same.</div>',
                 unsafe_allow_html=True)
-    st.dataframe([{"Page": page, "Line resets fixed": hits} for page, hits in fixed.items()],
-                 hide_index=True, use_container_width=True)
 
 
 def render_legend_preview(status):
@@ -321,6 +328,19 @@ def start_new_document(file_bytes, file_name, unique_id):
         st.session_state.doc.close()
     st.session_state.uploaded_file_id = unique_id
     st.session_state.doc              = fitz.open(stream=file_bytes, filetype="pdf")
+
+    # PDF clean-up, automatically on every new file, before any step edits
+    # it (see pdf_preflight.py). If the clean-up can't handle a particular
+    # PDF, carry on with the original file rather than blocking the upload.
+    try:
+        cleaned = apply_preflight(st.session_state.doc)
+        if cleaned['doc'] is not st.session_state.doc:
+            st.session_state.doc.close()
+            st.session_state.doc = cleaned['doc']
+        st.session_state.preflight_result = {'fixed': cleaned['fixed'], 'error': None}
+    except Exception as e:
+        st.session_state.preflight_result = {'fixed': {}, 'error': f"{type(e).__name__}: {e}"}
+
     st.session_state.file_name        = file_name
     st.session_state.current_step     = 0
     st.session_state.step_status      = {k: 'pending' for k in STEP_ORDER}
@@ -456,6 +476,7 @@ if st.session_state.active_view == 'PDF Modifier':
         st.stop()
 
     doc = st.session_state.doc
+    render_preflight_status(st.session_state.get('preflight_result'))
 
     st.markdown("---")
 
@@ -465,7 +486,8 @@ if st.session_state.active_view == 'PDF Modifier':
     with col_reset:
         if st.button("Start Over", use_container_width=True, type="secondary"):
             doc.close()
-            for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results']:
+            for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results',
+                        'preflight_result']:
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -538,14 +560,7 @@ if st.session_state.active_view == 'PDF Modifier':
 
                 if apply_clicked:
                     with st.spinner(f'Applying {label}...'):
-                        if step_key == 'preflight':
-                            result = apply_preflight(doc)
-                            new_doc = result.pop('doc')
-                            if new_doc is not doc:
-                                doc.close()
-                            st.session_state.doc = new_doc
-                            st.session_state.step_results[step_key] = result
-                        elif step_key == 'logo':
+                        if step_key == 'logo':
                             apply_logo(doc)
                             st.session_state.step_results[step_key] = None
                         elif step_key == 'text_replace':
@@ -578,9 +593,7 @@ if st.session_state.active_view == 'PDF Modifier':
                 st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
 
                 with st.expander("View details", expanded=False):
-                    if step_key == 'preflight':
-                        render_preflight_preview(result)
-                    elif step_key == 'logo':
+                    if step_key == 'logo':
                         pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
                         st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
                     elif step_key == 'text_replace':
@@ -1190,7 +1203,7 @@ elif st.session_state.active_view == 'Quote Estimator':
         # also has [–] = double glazing), so e.g. 6/6/6 becomes 4/6/6 with one
         # click on the first row. A "/" sits between the rows of buttons. The
         # glass type is a dropdown underneath, printed next to the window.
-        # The colour comes from the widths (GLASS_COLOURS in window_diagram.py).
+        # Each LHG code has its own glass pattern (GLASS_CODE_PATTERNS in window_diagram.py).
         # Starts on 4/4/4.
         st.session_state.setdefault("window_diagram_glass_1", "4")
         st.session_state.setdefault("window_diagram_glass_2", "4")
@@ -1253,7 +1266,26 @@ elif st.session_state.active_view == 'Quote Estimator':
         glass_type = st.selectbox("Type", type_options, key="window_diagram_glass_type")
         window_glass_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
         window_glass_type = None if glass_type == "None" else glass_type
-        window_glass_colour = glass_colour(window_glass_widths)
+
+        # LHG code: the codes matching these widths + type (e.g. 6/6/6 plain
+        # = LHG006 (44), LHG009 (48), LHG010 (54) -- they differ by cavity).
+        # Each code has its own pattern (GLASS_CODE_PATTERNS in
+        # window_diagram.py). No matching code -> plain fallback colour.
+        matching_codes = glass_codes_for(window_glass_widths, window_glass_type)
+        code_labels = [f"{code} ({cavity})" for code, cavity in matching_codes]
+        window_glass_code = None
+        if code_labels:
+            if st.session_state.get("window_diagram_glass_code") not in code_labels:
+                st.session_state["window_diagram_glass_code"] = code_labels[0]
+            chosen_label = st.selectbox("LHG code", code_labels, key="window_diagram_glass_code",
+                                        disabled=len(code_labels) == 1)
+            window_glass_code = chosen_label.split(" ")[0]
+
+        # Pattern style for two-colour glass -- a setting for trialling.
+        window_glass_pattern = st.selectbox("Glass pattern", GLASS_PATTERN_TYPES,
+                                            key="window_diagram_glass_pattern")
+        window_glass_colour = (glass_fill_for_code(window_glass_code, window_glass_pattern)
+                               if window_glass_code else GlassFill([GLASS_OTHER_COLOUR]))
         window_glass_label = glass_label_text(window_glass_widths, window_glass_type)
 
         # Glass that isn't in the glass list: a pop-up when it's first
@@ -1267,8 +1299,9 @@ elif st.session_state.active_view == 'Quote Estimator':
                 st.toast(f"{glass_problem}.", icon="⚠️")
                 st.session_state["window_diagram_glass_warned"] = glass_choice
             st.caption(f"⚠️ {glass_problem}."
-                       + ("" if window_glass_widths in GLASS_COLOURS else
-                          " It's drawn in the fallback colour, with its widths printed on the drawing."))
+                       + " It's drawn in the plain fallback colour"
+                       + ("." if window_glass_widths in GLASS_COMBINATIONS else
+                          ", with its widths printed on the drawing."))
         else:
             st.session_state["window_diagram_glass_warned"] = None
 

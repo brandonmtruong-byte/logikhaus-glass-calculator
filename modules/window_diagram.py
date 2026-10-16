@@ -105,19 +105,191 @@ GLASS_OTHER_COLOUR = _hex_rgb("#00BB00")
 GLASS_PANE_WIDTHS = ["4", "6", "8"]
 GLASS_TYPES = ["CN", "SB", "ORN", "ECL", "CN+SB", "CN+ORN", "HST", "HS", "SMOOTH PN", "VAR-PN"]
 
-# The glass that actually exists, from the glass list: each width
-# combination and the types it comes in ("" = plain, no type). +30% / +50%
-# / +80% variants count as their base type. LHG014 (47DB) doesn't give pane
-# widths, so it isn't listed here.
-GLASS_COMBINATIONS = {
-    "4/4":   {"", "CN", "CN+ORN", "CN+SB", "ECL", "ORN", "SB", "SMOOTH PN", "VAR-PN"},
-    "6/6":   {"", "CN", "ECL", "SB"},
-    "8/8":   {"", "CN", "HS", "HST"},
-    "4/4/4": {"", "CN", "ECL", "ORN", "SB", "SMOOTH PN", "VAR-PN"},
-    "6/4/4": {"", "CN", "ECL", "ORN", "SB"},
-    "6/6/6": {"", "CN", "ECL", "SB"},
-    "8/8/8": {""},
+# ── Glass by LHG code ───────────────────────────────────────────────────
+# Every LHG code is drawn in its own pattern: one pastel colour, or two of
+# them combined (striped -- see GLASS_PATTERN_TYPES). 10 colours give 9
+# single colours + 45 pairs = 54 patterns for the 46 codes. The colours were
+# chosen to be clearly distinct from each other (also for red-green colour
+# blindness), pale enough that the black opening lines and arrows stay easy
+# to read, and unlike any frame finish or plain white. The palest (#10)
+# only appears in pairs.
+GLASS_PASTELS = [
+    "#66DBDB",   # 1 aqua
+    "#B4B4FF",   # 2 periwinkle
+    "#F5DBFF",   # 3 lilac
+    "#FFA7CE",   # 4 pink
+    "#FFB49A",   # 5 peach
+    "#DBC166",   # 6 ochre
+    "#C1C1B4",   # 7 warm grey
+    "#E8FFA7",   # 8 lime
+    "#80FFCE",   # 9 mint
+    "#DBFFF5",   # 10 ice
+]
+
+# Every entry in the glass list: (LHG code, pane widths, type, cavity mm).
+# A code can appear more than once (e.g. LHG015 ORN and SB). Types: "" =
+# plain; +30/+50/+80% variants count as their base type. LHG014 (47DB)
+# gives no pane widths, so it can't be picked by widths.
+GLASS_CODES = [
+    ("LHG001", '4/4', "", "26"),
+    ("LHG002", '6/6', "", "32"),
+    ("LHG003", '8/8', "", "32"),
+    ("LHG003", '8/8', "HST", "32"),
+    ("LHG015", '4/4', "ORN", "26"),
+    ("LHG015", '4/4', "SB", "26"),
+    ("LHG016", '6/6', "SB", "32"),
+    ("LHG026", '4/4', "CN", "26"),
+    ("LHG027", '6/6', "CN", "32"),
+    ("LHG028", '8/8', "CN", "32"),
+    ("LHG037", '4/4', "VAR-PN", "26"),
+    ("LHG043", '4/4', "SMOOTH PN", "26"),
+    ("LHG055", '4/4', "ECL", "26"),
+    ("LHG056", '6/6', "ECL", "32"),
+    ("LHG077", '4/4', "CN+SB", "26"),
+    ("LHG077", '4/4', "CN+ORN", "26"),
+    ("LHG003", '8/8', "HS", "32"),
+    ("LHG004", '4/4/4', "", "44"),
+    ("LHG005", '6/4/4', "", "44"),
+    ("LHG006", '6/6/6', "", "44"),
+    ("LHG018", '4/4/4', "SB", "44"),
+    ("LHG018", '4/4/4', "ORN", "44"),
+    ("LHG019", '6/4/4', "SB", "44"),
+    ("LHG019", '6/4/4', "ORN", "44"),
+    ("LHG020", '6/6/6', "SB", "44"),
+    ("LHG029", '4/4/4', "CN", "44"),
+    ("LHG030", '6/4/4', "CN", "44"),
+    ("LHG031", '6/6/6', "CN", "44"),
+    ("LHG037", '4/4/4', "VAR-PN", "44"),
+    ("LHG045", '4/4/4', "SMOOTH PN", "44"),
+    ("LHG057", '4/4/4', "ECL", "44"),
+    ("LHG058", '6/4/4', "ECL", "44"),
+    ("LHG059", '6/6/6', "ECL", "44"),
+    ("LHG007", '4/4/4', "", "48"),
+    ("LHG008", '6/4/4', "", "48"),
+    ("LHG009", '6/6/6', "", "48"),
+    ("LHG010", '6/6/6', "", "54"),
+    ("LHG011", '8/8/8', "", "54"),
+    ("LHG014", None, "DB", "54"),
+    ("LHG021", '4/4/4', "SB", "48"),
+    ("LHG021", '4/4/4', "ORN", "48"),
+    ("LHG022", '6/4/4', "SB", "48"),
+    ("LHG022", '6/4/4', "ORN", "48"),
+    ("LHG023", '6/6/6', "SB", "48"),
+    ("LHG024", '6/6/6', "SB", "54"),
+    ("LHG032", '4/4/4', "CN", "48"),
+    ("LHG033", '6/4/4', "CN", "48"),
+    ("LHG034", '6/6/6', "CN", "48"),
+    ("LHG035", '6/6/6', "CN", "54"),
+    ("LHG040", '4/4/4', "VAR-PN", "48"),
+    ("LHG046", '4/4/4', "SMOOTH PN", "48"),
+    ("LHG060", '4/4/4', "ECL", "48"),
+    ("LHG061", '6/4/4', "ECL", "48"),
+    ("LHG062", '6/6/6', "ECL", "48"),
+    ("LHG063", '6/6/6', "ECL", "54"),
+]
+
+# Each LHG code's pattern colours (one = solid, two = striped), assigned so
+# codes with the same pane widths look as different as possible.
+GLASS_CODE_PATTERNS = {
+    "LHG001": ["#B4B4FF", "#DBC166"],
+    "LHG002": ["#66DBDB", "#DBC166"],
+    "LHG003": ["#66DBDB", "#C1C1B4"],
+    "LHG015": ["#F5DBFF", "#C1C1B4"],
+    "LHG016": ["#B4B4FF", "#C1C1B4"],
+    "LHG026": ["#FFA7CE", "#E8FFA7"],
+    "LHG027": ["#F5DBFF", "#E8FFA7"],
+    "LHG028": ["#B4B4FF", "#E8FFA7"],
+    "LHG037": ["#66DBDB"],
+    "LHG043": ["#FFB49A", "#80FFCE"],
+    "LHG055": ["#F5DBFF", "#DBFFF5"],
+    "LHG056": ["#FFA7CE", "#80FFCE"],
+    "LHG077": ["#66DBDB", "#FFB49A"],
+    "LHG004": ["#B4B4FF"],
+    "LHG005": ["#66DBDB", "#FFA7CE"],
+    "LHG006": ["#F5DBFF"],
+    "LHG018": ["#FFA7CE"],
+    "LHG019": ["#B4B4FF", "#FFB49A"],
+    "LHG020": ["#FFB49A"],
+    "LHG029": ["#DBC166"],
+    "LHG030": ["#F5DBFF", "#DBC166"],
+    "LHG031": ["#C1C1B4"],
+    "LHG045": ["#E8FFA7"],
+    "LHG057": ["#80FFCE"],
+    "LHG058": ["#C1C1B4", "#80FFCE"],
+    "LHG059": ["#66DBDB", "#B4B4FF"],
+    "LHG007": ["#F5DBFF", "#FFB49A"],
+    "LHG008": ["#66DBDB", "#E8FFA7"],
+    "LHG009": ["#FFA7CE", "#DBC166"],
+    "LHG010": ["#E8FFA7", "#80FFCE"],
+    "LHG011": ["#B4B4FF", "#80FFCE"],
+    "LHG014": ["#F5DBFF", "#80FFCE"],
+    "LHG021": ["#C1C1B4", "#DBFFF5"],
+    "LHG022": ["#B4B4FF", "#DBFFF5"],
+    "LHG023": ["#66DBDB", "#DBFFF5"],
+    "LHG024": ["#B4B4FF", "#F5DBFF"],
+    "LHG032": ["#66DBDB", "#F5DBFF"],
+    "LHG033": ["#F5DBFF", "#FFA7CE"],
+    "LHG034": ["#FFA7CE", "#FFB49A"],
+    "LHG035": ["#DBC166", "#C1C1B4"],
+    "LHG040": ["#B4B4FF", "#FFA7CE"],
+    "LHG046": ["#FFB49A", "#DBC166"],
+    "LHG060": ["#C1C1B4", "#E8FFA7"],
+    "LHG061": ["#FFB49A", "#C1C1B4"],
+    "LHG062": ["#E8FFA7", "#DBFFF5"],
+    "LHG063": ["#66DBDB", "#80FFCE"],
 }
+
+# The glass that exists, by widths: {widths: {types}} -- derived from
+# GLASS_CODES so the two can never disagree.
+GLASS_COMBINATIONS = {}
+for _code, _widths, _type, _cavity in GLASS_CODES:
+    if _widths:
+        GLASS_COMBINATIONS.setdefault(_widths, set()).add(_type)
+
+
+def glass_codes_for(widths, glass_type=None):
+    """
+    The LHG codes matching these widths and type, as a list of
+    (code, cavity) in list order -- e.g. 6/6/6 plain gives LHG006 (44),
+    LHG009 (48) and LHG010 (54).
+    """
+    out = []
+    for code, w, t, cavity in GLASS_CODES:
+        if w == widths and t == (glass_type or "") and (code, cavity) not in out:
+            out.append((code, cavity))
+    return out
+
+
+# Pattern styles for two-colour glass (a setting, for trialling). Stripes
+# are anchored to the whole window, so they line up across panes, and
+# sized so about GLASS_STRIPES_ACROSS stripes of the second colour cross it.
+GLASS_PATTERN_TYPES = ["Diagonal stripes", "Vertical stripes", "Horizontal stripes"]
+GLASS_STRIPES_ACROSS = 4
+
+
+class GlassFill:
+    """
+    A glass fill for draw_window_diagram()'s glass_color: one or two RGB
+    colours (0-1) and a pattern style from GLASS_PATTERN_TYPES. One colour
+    draws exactly like a plain glass_color tuple.
+    """
+    def __init__(self, colours, pattern=GLASS_PATTERN_TYPES[0]):
+        self.colours = [tuple(c) for c in colours]
+        self.pattern = pattern
+        self.window = None   # set by _build_diagram_doc(): the window's outer rect
+
+    def bound_to(self, window_rect):
+        bound = GlassFill(self.colours, self.pattern)
+        bound.window = fitz.Rect(window_rect)
+        return bound
+
+
+def glass_fill_for_code(code, pattern=GLASS_PATTERN_TYPES[0]):
+    """The GlassFill for an LHG code, or a plain fallback if the code isn't known."""
+    hexes = GLASS_CODE_PATTERNS.get(code)
+    if not hexes:
+        return GlassFill([GLASS_OTHER_COLOUR], pattern)
+    return GlassFill([_hex_rgb(h) for h in hexes], pattern)
 
 
 def glass_colour(widths):
@@ -145,7 +317,7 @@ def glass_label_text(widths, glass_type=None):
     to print.
     """
     parts = []
-    if widths not in GLASS_COLOURS:
+    if widths not in GLASS_COMBINATIONS:
         parts.append(widths)
     if glass_type:
         parts.append(glass_type)
@@ -202,8 +374,8 @@ LINE_COLOR = (0.2, 0.2, 0.2)
 # hinge-side corners to the middle of the handle side); tilt and turn adds
 # the "tilt" lines too (from the two bottom corners up to the middle of
 # the top). Dash pattern is in points: 4.5 pt dash, 3 pt gap.
-OPENING_LINE_COLOR = (0.25, 0.25, 0.25)
-OPENING_LINE_WIDTH = 0.5
+OPENING_LINE_COLOR = (0, 0, 0)
+OPENING_LINE_WIDTH = 0.6
 OPENING_LINE_DASHES = '[4.5 3] 0'
 
 # Sliding sash arrow: a solid line across the middle of the sliding glass,
@@ -213,7 +385,7 @@ OPENING_LINE_DASHES = '[4.5 3] 0'
 SLIDE_ARROW_INSET_RATIO = 0.12
 SLIDE_ARROW_HEAD_RATIO  = 0.13    # arrowhead length, as a fraction of the arrow
 SLIDE_ARROW_HEAD_MAX_PT = 14
-SLIDE_ARROW_COLOR = (0.25, 0.25, 0.25)
+SLIDE_ARROW_COLOR = (0, 0, 0)
 
 # French doors: at the middle, the door WITH the handle shows its full
 # meeting stile, and this fraction of the other door's meeting stile is
@@ -481,6 +653,10 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
         xs = [x0 + draw_w * i / count for i in range(count)] + [x1]
     mullions = xs[1:-1]
     outer = fitz.Rect(x0, y0, x1, y1)
+    if isinstance(glass_color, GlassFill):
+        # Stripes are laid out across the whole window, so they line up
+        # from one pane to the next.
+        glass_color = glass_color.bound_to(outer)
 
     shorter_side_mm = min(width_mm, height_mm)
     frame_thickness = (FRAME_THICKNESS_MM * scale
@@ -498,12 +674,12 @@ def _build_diagram_doc(width_mm, height_mm, frame_color, glass_color, sash_margi
             gx1 = x1 - frame_thickness if i == count - 1 else xs[i + 1] - mullion_half
             for glass in _fixed_glass_rects(gx0, gx1, y0 + frame_thickness, y1 - frame_thickness,
                                             _transom_y(panes[i], y0, scale), mullion_half):
-                page.draw_rect(glass, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+                _draw_glass(page, glass, glass_color, (0.2, 0.2, 0.2), 1.2)
     else:
         for inner in _fixed_glass_rects(x0 + frame_thickness, x1 - frame_thickness,
                                         y0 + frame_thickness, y1 - frame_thickness,
                                         _transom_y(panes[0], y0, scale), mullion_half):
-            page.draw_rect(inner, color=(0.2, 0.2, 0.2), fill=glass_color, width=1.2)
+            _draw_glass(page, inner, glass_color, (0.2, 0.2, 0.2), 1.2)
 
     # Frame construction seams: the top and bottom rails run the FULL
     # width, and the side stiles fit between them. A short line at each
@@ -723,6 +899,67 @@ def _draw_double_slide(page, outer, scale, frame_thickness, frame_color, glass_c
                    slide_dir=door_side, transom_below=transom_below, meeting_side=meeting)
 
 
+def _draw_glass(page, rect, glass, outline, width):
+    """
+    Draw one glass area: a plain colour (an RGB tuple, exactly as before)
+    or a GlassFill -- its first colour as the background, the second in
+    stripes over it -- then the outline on top.
+    """
+    if not isinstance(glass, GlassFill):
+        page.draw_rect(rect, color=outline, fill=glass, width=width)
+        return
+    if len(glass.colours) == 1 or glass.window is None:
+        page.draw_rect(rect, color=outline, fill=glass.colours[0], width=width)
+        return
+    page.draw_rect(rect, color=None, fill=glass.colours[0], width=0)
+
+    # Stripe direction: u is the distance across the stripes. Diagonal
+    # stripes run at 45 degrees ("/"), so u = (x + y) / sqrt(2).
+    win = glass.window
+    if glass.pattern == "Vertical stripes":
+        u_of = lambda x, y: x
+        u_min, u_max = win.x0, win.x1
+    elif glass.pattern == "Horizontal stripes":
+        u_of = lambda x, y: y
+        u_min, u_max = win.y0, win.y1
+    else:
+        root2 = 2 ** 0.5
+        u_of = lambda x, y: (x + y) / root2
+        u_min, u_max = u_of(win.x0, win.y0), u_of(win.x1, win.y1)
+    period = (u_max - u_min) / GLASS_STRIPES_ACROSS
+
+    corners = [(rect.x0, rect.y0), (rect.x1, rect.y0), (rect.x1, rect.y1), (rect.x0, rect.y1)]
+    k = 0
+    while u_min + k * period < u_max:
+        # The second colour fills the second half of each period.
+        band = _clip_band(corners, u_of, u_min + (k + 0.5) * period, u_min + (k + 1) * period)
+        if len(band) >= 3:
+            shape = page.new_shape()
+            shape.draw_polyline(band + [band[0]])
+            shape.finish(color=None, fill=glass.colours[1], closePath=True, width=0)
+            shape.commit()
+        k += 1
+    page.draw_rect(rect, color=outline, fill=None, width=width)
+
+
+def _clip_band(polygon, u_of, u_lo, u_hi):
+    """The part of a convex polygon where u_lo <= u(x, y) <= u_hi (u linear in x, y)."""
+    def clip(points, inside, value):
+        out = []
+        for i, p in enumerate(points):
+            q = points[(i + 1) % len(points)]
+            p_in, q_in = inside(p), inside(q)
+            if p_in:
+                out.append(p)
+            if p_in != q_in:
+                up, uq = u_of(*p), u_of(*q)
+                t = (value - up) / (uq - up)
+                out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+        return out
+    pts = clip(polygon, lambda p: u_of(*p) >= u_lo, u_lo)
+    return clip(pts, lambda p: u_of(*p) <= u_hi, u_hi) if pts else []
+
+
 def _transom_y(pane, y0, scale):
     """The y of a panel's transom centre line, or None if it has no bottom section."""
     top_mm = pane.get('top_height_mm')
@@ -804,7 +1041,7 @@ def _draw_sash(page, outer, scale, frame_thickness, frame_color, glass_color, ha
                       sash.x1 - stile, sash.y1 - bottom_rail)
 
     page.draw_rect(sash, color=LINE_COLOR, fill=frame_color, width=1.2)
-    page.draw_rect(glass, color=LINE_COLOR, fill=glass_color, width=1.2)
+    _draw_glass(page, glass, glass_color, LINE_COLOR, 1.2)
 
     # Stile edges run the full sash height, top to bottom. The glass
     # rectangle's own top and bottom edges already mark where the rails
