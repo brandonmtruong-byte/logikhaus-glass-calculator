@@ -263,7 +263,8 @@ def glass_codes_for(widths, glass_type=None):
 # Pattern styles for two-colour glass (a setting, for trialling). Stripes
 # are anchored to the whole window, so they line up across panes, and
 # sized so about GLASS_STRIPES_ACROSS stripes of the second colour cross it.
-GLASS_PATTERN_TYPES = ["Diagonal stripes", "Checkered", "Vertical stripes", "Horizontal stripes"]
+GLASS_PATTERN_TYPES = ["Diagonal stripes", "Checkered", "Diagonal split",
+                       "Vertical stripes", "Horizontal stripes"]
 GLASS_STRIPES_ACROSS = 4
 # Checkered: squares sized so about this many fit the window's height (as
 # many as fit across its width follow from that), like the stripes' scale.
@@ -916,6 +917,22 @@ def _draw_glass(page, rect, glass, outline, width):
         return
     page.draw_rect(rect, color=None, fill=glass.colours[0], width=0)
     win = glass.window
+
+    if glass.pattern == "Diagonal split":
+        # The whole window split in two along its diagonal, corner to corner
+        # ("/", bottom-left to top-right, the same way as the stripes): the
+        # first colour above-left of it, the second below-right. Measured
+        # across the whole window, so the split runs on through every pane.
+        u_of = lambda x, y: (x - win.x0) / win.width + (y - win.y0) / win.height
+        corners = [(rect.x0, rect.y0), (rect.x1, rect.y0), (rect.x1, rect.y1), (rect.x0, rect.y1)]
+        half = _clip_band(corners, u_of, 1.0, 3.0)
+        if len(half) >= 3:
+            shape = page.new_shape()
+            shape.draw_polyline(half + [half[0]])
+            shape.finish(color=None, fill=glass.colours[1], closePath=True, width=0)
+            shape.commit()
+        page.draw_rect(rect, color=outline, fill=None, width=width)
+        return
 
     if glass.pattern == "Checkered":
         # Squares laid out across the whole window from its top-left corner
