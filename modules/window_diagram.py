@@ -263,8 +263,11 @@ def glass_codes_for(widths, glass_type=None):
 # Pattern styles for two-colour glass (a setting, for trialling). Stripes
 # are anchored to the whole window, so they line up across panes, and
 # sized so about GLASS_STRIPES_ACROSS stripes of the second colour cross it.
-GLASS_PATTERN_TYPES = ["Diagonal stripes", "Vertical stripes", "Horizontal stripes"]
+GLASS_PATTERN_TYPES = ["Diagonal stripes", "Checkered", "Vertical stripes", "Horizontal stripes"]
 GLASS_STRIPES_ACROSS = 4
+# Checkered: squares sized so about this many fit the window's height (as
+# many as fit across its width follow from that), like the stripes' scale.
+GLASS_CHECKS_HIGH = 4
 
 
 class GlassFill:
@@ -912,10 +915,28 @@ def _draw_glass(page, rect, glass, outline, width):
         page.draw_rect(rect, color=outline, fill=glass.colours[0], width=width)
         return
     page.draw_rect(rect, color=None, fill=glass.colours[0], width=0)
+    win = glass.window
+
+    if glass.pattern == "Checkered":
+        # Squares laid out across the whole window from its top-left corner
+        # (so they line up across panes); the second colour fills every
+        # other square, each clipped to this glass area.
+        size = win.height / GLASS_CHECKS_HIGH
+        rows = int(win.height / size + 0.5) + 1
+        cols = int(win.width / size) + 2
+        for r in range(rows):
+            for c in range(cols):
+                if (r + c) % 2 == 0:
+                    continue
+                square = fitz.Rect(win.x0 + c * size, win.y0 + r * size,
+                                   win.x0 + (c + 1) * size, win.y0 + (r + 1) * size) & rect
+                if not square.is_empty:
+                    page.draw_rect(square, color=None, fill=glass.colours[1], width=0)
+        page.draw_rect(rect, color=outline, fill=None, width=width)
+        return
 
     # Stripe direction: u is the distance across the stripes. Diagonal
     # stripes run at 45 degrees ("/"), so u = (x + y) / sqrt(2).
-    win = glass.window
     if glass.pattern == "Vertical stripes":
         u_of = lambda x, y: x
         u_min, u_max = win.x0, win.x1
