@@ -263,8 +263,39 @@ def _is_dashed(shape):
     return shape.get('dashes') not in (None, '[] 0', '[] 0.0', '[] 0.00')
 
 
-def _drawing_symbols(shapes):
+# Every size test below is RELATIVE to the drawing itself, so the check works
+# the same for a tiny window, a huge one, or a PDF exported at another zoom:
+#   - line thickness is compared with the drawing's thickest line (its frame
+#     lines; door swing lines are ~1/12 of that),
+#   - lengths and gaps are compared with the size of the drawing's frame,
+#   - arrowhead strokes are compared with their own arrow's length.
+FRAME_LINE_SHARE = 0.4    # at least this share of the thickest line = a frame line
+THIN_LINE_SHARE  = 0.3    # under this share = a thin line (door swing lines, arrows)
+
+
+def _drawing_scale(shapes):
+    """
+    (frame box, thickest line width) for a window's drawing, or (None, None)
+    if no frame is drawn. The frame box is the area covered by its frame
+    lines; its shorter side is the drawing's unit of size.
+    """
+    widths = [s.get('width') or 0 for s in shapes if not _is_dashed(s)]
+    thickest = max(widths, default=0)
+    if thickest <= 0:
+        return None, None
+    frame = fitz.Rect()
+    for s in shapes:
+        if not _is_dashed(s) and (s.get('width') or 0) >= FRAME_LINE_SHARE * thickest:
+            frame |= s['rect']
+    if frame.is_empty or min(frame.width, frame.height) <= 0:
+        return None, None
+    return frame, thickest
+
+
+def _drawing_symbols(shapes, frame, thickest):
     """Count the opening symbols in one window's drawing."""
+    unit = min(frame.width, frame.height)
+    thin_limit = THIN_LINE_SHARE * thickest
     dashed = thin = 0
     thin_segments = []
     for s in shapes:
@@ -275,27 +306,36 @@ def _drawing_symbols(shapes):
                 continue
             a, b = it[1], it[2]
             dx, dy = abs(b.x - a.x), abs(b.y - a.y)
-            if dash and dx > 1 and dy > 1:
+            sloped = dx > 0.03 * unit and dy > 0.03 * unit
+            if dash and sloped:
                 dashed += 1                                   # tilt / turn lines
-            elif not dash and width < 0.2 and dx > 2 and dy > 2 and math.hypot(dx, dy) > 8:
+            elif not dash and width < thin_limit and sloped and math.hypot(dx, dy) > 0.3 * unit:
                 thin += 1                                     # door swing lines
-            if not dash and width < 0.3:
+            if not dash and width < thin_limit:
                 thin_segments.append((a, b))
 
     # Arrows: a thin horizontal shaft with two short slanted strokes meeting
-    # at one end, one going up and one going down.
+    # at one end, one going up and one going down. Stroke size and "meeting"
+    # are judged against that shaft's own length.
     arrows = 0
-    shafts = [(a, b) for a, b in thin_segments if abs(a.y - b.y) < 0.3 and abs(a.x - b.x) > 4]
-    strokes = [(a, b) for a, b in thin_segments
-               if 0.8 < math.hypot(b.x - a.x, b.y - a.y) < 14
-               and abs(b.x - a.x) > 0.2 and abs(b.y - a.y) > 0.2]
-    for a, b in shafts:
+    for a, b in thin_segments:
+        shaft = abs(a.x - b.x)
+        if abs(a.y - b.y) > 0.02 * shaft or shaft < 0.1 * unit:
+            continue
         for end in (a, b):
-            touching = [(p, q) for p, q in strokes
-                        if min(math.hypot(p.x - end.x, p.y - end.y),
-                               math.hypot(q.x - end.x, q.y - end.y)) < 0.5]
-            up = any(max(p.y, q.y) > end.y + 0.2 for p, q in touching)
-            down = any(min(p.y, q.y) < end.y - 0.2 for p, q in touching)
+            touch = 0.04 * shaft
+            up = down = False
+            for p, q in thin_segments:
+                length = math.hypot(q.x - p.x, q.y - p.y)
+                if not (0.03 * shaft < length < 0.5 * shaft):
+                    continue
+                if abs(q.x - p.x) < 0.01 * shaft or abs(q.y - p.y) < 0.01 * shaft:
+                    continue                                  # not slanted
+                if min(math.hypot(p.x - end.x, p.y - end.y),
+                       math.hypot(q.x - end.x, q.y - end.y)) > touch:
+                    continue
+                up = up or max(p.y, q.y) > end.y + 0.01 * shaft
+                down = down or min(p.y, q.y) < end.y - 0.01 * shaft
             if up and down:
                 arrows += 1
     return {'dashed': dashed, 'thin': thin, 'arrows': arrows}
@@ -303,33 +343,34 @@ def _drawing_symbols(shapes):
 
 def _is_shaped_window(shapes):
     """True for curved (round / arched) or angled windows."""
+    frame, thickest = _drawing_scale(shapes)
+    if frame is None:
+        return False
+    unit = min(frame.width, frame.height)
     for s in shapes:
         for it in s['items']:
             if it[0] == 'c':
                 return True                                   # a curved outline
-            if it[0] == 'l' and (s.get('width') or 0) >= 0.5:
+            if (it[0] == 'l' and not _is_dashed(s)
+                    and (s.get('width') or 0) >= FRAME_LINE_SHARE * thickest):
                 a, b = it[1], it[2]
-                if abs(a.x - b.x) > 2 and abs(a.y - b.y) > 2:
+                if abs(a.x - b.x) > 0.05 * unit and abs(a.y - b.y) > 0.05 * unit:
                     return True                               # a sloped frame edge
     return False
 
 
-def _has_door_threshold(shapes):
+def _has_door_threshold(shapes, frame):
     """
     True if the frame has a door threshold instead of a bottom rail.
     Windows: a filled strip across (nearly) the full frame width at the
-    very bottom. Doors: no such strip.
+    very bottom. Doors: no such strip (only the narrower sash rail).
     """
-    frame = fitz.Rect()
-    for s in shapes:
-        if (s.get('width') or 0) >= 0.5:
-            frame |= s['rect']
-    if frame.is_empty:
-        return False
     for s in shapes:
         r = s['rect']
-        if (s.get('fill') and any(it[0] == 're' for it in s['items']) and r.height < 6
-                and frame.y1 - r.y1 < 1.6 and r.width >= 0.9 * frame.width):
+        if (s.get('fill') and any(it[0] == 're' for it in s['items'])
+                and r.height < 0.15 * frame.height
+                and frame.y1 - r.y1 < 0.06 * frame.height
+                and r.width >= 0.9 * frame.width):
             return False
     return True
 
@@ -339,14 +380,15 @@ def opening_type_from_drawing(shapes, codes):
     The opening type a window's drawing shows (one of the codes in the
     table above), or None if there's no drawing to read.
     """
-    if not any((s.get('width') or 0) >= 0.5 for s in shapes):
+    frame, thickest = _drawing_scale(shapes)
+    if frame is None:
         return None                                           # no frame drawn
-    sym = _drawing_symbols(shapes)
+    sym = _drawing_symbols(shapes, frame, thickest)
     drawn = ' '.join(codes)
     if sym['arrows']:
         return 'SLIDING WINDOW' if sym['dashed'] else 'LIFT AND SLIDE DOOR'
     if sym['dashed']:
-        return 'INSWING DOOR' if _has_door_threshold(shapes) else 'INSWING WINDOW'
+        return 'INSWING DOOR' if _has_door_threshold(shapes, frame) else 'INSWING WINDOW'
     if sym['thin'] >= 2:
         return 'OUTSWING DOOR' if re.search(r'\bDX\b', drawn) else 'INSWING DOOR'
     return 'FIXED WINDOW'
