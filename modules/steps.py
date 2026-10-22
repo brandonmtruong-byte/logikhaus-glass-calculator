@@ -31,10 +31,9 @@ from .pdf_preflight import preflight_pdf_bytes
 
 import fitz
 
-STEP_ORDER = ['preflight', 'logo', 'text_replace', 'mass', 'frame', 'hardware_schedule', 'legend']
+STEP_ORDER = ['logo', 'text_replace', 'mass', 'frame', 'hardware_schedule', 'legend']
 
 STEP_LABELS = {
-    'preflight':         'PDF Clean-up',
     'logo':              'Logo Stamp',
     'text_replace':      'Schedule Text Editor',
     'mass':              'Glass Weight Calculator',
@@ -46,7 +45,9 @@ STEP_LABELS = {
 
 def apply_preflight(doc):
     """
-    Step 1: clean the PDF before anything else edits it -- every
+    Run automatically on every newly loaded PDF (app.py's
+    start_new_document()), not as a step: clean the PDF before anything
+    else edits it -- every
     "0 0 TD" / "0 0 Td" text move becomes an equivalent absolute "Tm"
     (see pdf_preflight.py), so later edits here or in Acrobat can't shift
     text and make letters overlap. The page looks exactly the same.
