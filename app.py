@@ -26,7 +26,7 @@ from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf
                                     GLASS_PATTERN_TYPES, GLASS_OTHER_COLOUR, GlassFill,
                                     glass_codes_for, glass_fill_for_code,
                                     glass_label_text, glass_exists)
-from modules.quote_estimator import render_quote_estimator
+from modules.price_estimator import render_price_estimate
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1280,6 +1280,9 @@ elif st.session_state.active_view == 'Quote Estimator':
             chosen_label = st.selectbox("LHG code", code_labels, key="window_diagram_glass_code",
                                         disabled=len(code_labels) == 1)
             window_glass_code = chosen_label.split(" ")[0]
+        # The chosen code's cavity (mm) -- tells the price estimate whether
+        # 4/4/4 glass is the 44 (68 system) or 48 (88 system) kind.
+        window_glass_cavity = dict(matching_codes).get(window_glass_code)
 
         # Pattern style for two-colour glass -- a setting for trialling.
         window_glass_pattern = st.selectbox("Glass pattern", GLASS_PATTERN_TYPES,
@@ -1543,7 +1546,13 @@ elif st.session_state.active_view == 'Quote Estimator':
                     key="window_diagram_pdf_download",
                 )
 
-    # Price estimate for the same width x height entered above.
-    st.markdown("---")
-    render_quote_estimator(window_width_mm, window_height_mm, eyebrow=render_eyebrow)
+                # Price estimate for exactly what the diagram shows -- the
+                # diagram's settings ARE the input (see price_estimator.py).
+                st.markdown("---")
+                render_price_estimate(
+                    window_width_mm, window_height_mm, diagram_options,
+                    window_glass_widths, window_glass_cavity,
+                    glass_type=window_glass_type, eyebrow=render_eyebrow,
+                )
+
 
