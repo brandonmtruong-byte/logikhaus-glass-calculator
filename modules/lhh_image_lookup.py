@@ -198,7 +198,10 @@ def _list_children(service, folder_id):
         for f in response.get('files', []):
             if f['mimeType'] == 'application/vnd.google-apps.folder':
                 subfolder_ids.append(f['id'])
-            elif f['mimeType'].startswith('image/'):
+            elif f['mimeType'].startswith('image/') or f['mimeType'] == 'application/pdf':
+                # PDFs count too: some product images (e.g. finish swatches
+                # like LHH742) are supplied as one-page PDFs. They're turned
+                # into a picture when inserted -- see _pdf_to_image_bytes().
                 images[f['name']] = f['id']
         page_token = response.get('nextPageToken')
         if not page_token:
@@ -356,6 +359,35 @@ def _new_schedule_page(doc):
     return page, rows
 
 
+# A PDF "image" is rendered so its longer side is about this many pixels;
+# _shrink_image() then brings it down to the print resolution as usual.
+PDF_IMAGE_RENDER_PX = 1600
+
+
+def _pdf_to_image_bytes(pdf_bytes):
+    """
+    Turn a PDF product image into PNG bytes: its first page, cropped to the
+    largest photo on that page (so a product sheet's surrounding text or
+    disclaimers are left out), or the whole page if it has no photos (e.g.
+    a vector drawing). Anything outside the page itself is ignored.
+    Returns None if the PDF can't be read.
+    """
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
+            if pdf.page_count == 0:
+                return None
+            page = pdf[0]
+            clip = fitz.Rect(page.rect)
+            photos = [fitz.Rect(i['bbox']) & page.rect for i in page.get_image_info()]
+            photos = [r for r in photos if not r.is_empty]
+            if photos:
+                clip = max(photos, key=lambda r: r.get_area())
+            dpi = max(int(round(PDF_IMAGE_RENDER_PX / (max(clip.width, clip.height) / 72))), 1)
+            return page.get_pixmap(clip=clip, dpi=dpi).tobytes('png')
+    except Exception:
+        return None
+
+
 def _shrink_image(image_bytes, pixmap, img_rect):
     """
     Return image bytes sized for img_rect (the box the photo is printed
@@ -430,6 +462,8 @@ def build_hardware_schedule(codes, lookup, drive_images, image_cache=None):
             )
 
         image_bytes = image_cache.get(code_to_file_id.get(code))
+        if image_bytes and image_bytes[:5] == b'%PDF-':
+            image_bytes = _pdf_to_image_bytes(image_bytes)   # PDF -> picture
         if image_bytes:
             try:
                 pixmap = fitz.Pixmap(image_bytes)
