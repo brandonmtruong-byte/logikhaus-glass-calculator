@@ -179,6 +179,13 @@ def extract_size_and_glass_lines(page):
                 # 'Glass: | LHG026_4/4 (26) CN'.
                 'raw_text':    ' | '.join(parts),
                 'page':        page.number + 1,
+                # For the stamp's fit check (see _stamp_position()):
+                'x0':          piece['x0'],
+                'row_right':   max(p['x1'] for p in pieces
+                                   if p is piece or (abs(p['y_mid'] - piece['y_mid']) <= piece['font_size'] * 0.5
+                                                     and p['x0'] >= piece['x0'])),
+                'line_y_mid':  piece['y_mid'],
+                'pieces':      pieces,
             })
 
     for glass_line in glass_lines:
@@ -195,6 +202,68 @@ def match_glass_to_size(glass_line, size_entries):
         return None
     _, size_entry = min(above, key=lambda x: x[0])
     return size_entry
+
+
+# Where weight / area stamps go. Normally a stamp starts this far in from
+# the page's right edge, on the glass line itself.
+STAMP_RIGHT_OFFSET = 90
+# A stamp moved down a line (see _stamp_position()) is right-aligned so it
+# ENDS this far in from the page's right edge -- about where a normal stamp
+# ends.
+STAMP_RIGHT_MARGIN = 35
+# Minimum clear space (points) between a line's text and the stamp.
+STAMP_CLEAR_GAP = 4
+# How many lines below the glass line to try before giving up.
+STAMP_MAX_LINES_DOWN = 3
+
+
+def _row_right_edge(pieces, y_mid, size, x_from):
+    """Right-hand end of all the text on the row at y_mid, from x_from on."""
+    edges = [p['x1'] for p in pieces
+             if abs(p['y_mid'] - y_mid) <= size * 0.5 and p['x1'] > x_from]
+    return max(edges, default=x_from)
+
+
+def _stamp_position(glass_line, stamp_text, page_width):
+    """
+    (x, baseline y) for a weight / area stamp.
+
+    Normally: on the glass line, STAMP_RIGHT_OFFSET in from the page edge.
+
+    But a long glass line -- e.g. 'glass: LHG040_VAR-PN_88(48)4/4/4 (48 SB'
+    after the Schedule Text Editor -- runs under that spot, and the stamp
+    would print on top of it. Then the stamp goes on the next line down
+    instead, right-aligned to end STAMP_RIGHT_MARGIN in from the page edge.
+    Each line below (in the same column) is tried in turn, up to
+    STAMP_MAX_LINES_DOWN, for one whose text ends before the stamp starts.
+    If none has room, it stays on the glass line as before.
+    """
+    size = glass_line['font_size']
+    normal_x = page_width - STAMP_RIGHT_OFFSET
+    if glass_line.get('row_right') is None or \
+            glass_line['row_right'] + STAMP_CLEAR_GAP <= normal_x:
+        return normal_x, glass_line['y_base']
+
+    width = fitz.Font('helv').text_length(stamp_text, fontsize=size)
+    right_x = page_width - STAMP_RIGHT_MARGIN - width
+    pieces = glass_line['pieces']
+    x_from = glass_line['x0'] - 5
+
+    # The lines below in the same column, one per row, top to bottom.
+    below = sorted(
+        (p for p in pieces
+         if p['y_mid'] > glass_line['line_y_mid'] + size * 0.5
+         and abs(p['x0'] - glass_line['x0']) <= 20),
+        key=lambda p: p['y_mid'])
+    rows = []
+    for p in below:
+        if not rows or p['y_mid'] - rows[-1]['y_mid'] > p['font_size'] * 0.5:
+            rows.append(p)
+    for row in rows[:STAMP_MAX_LINES_DOWN]:
+        if _row_right_edge(pieces, row['y_mid'], row['font_size'], x_from) \
+                + STAMP_CLEAR_GAP <= right_x:
+            return right_x, row['y_base']
+    return normal_x, glass_line['y_base']
 
 
 def _stamp_highlight_rect(x, y_base, text, fontsize, fontname='helv'):
@@ -249,15 +318,16 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
 
         # Stamp the computed weight back onto the PDF next to the glass line
         stamp_text = f'[{weight_kg} kg]'
+        stamp_x, stamp_y = _stamp_position(glass_line, stamp_text, page_width)
         page.insert_text(
-            (page_width - 90, glass_line['y_base']),
+            (stamp_x, stamp_y),
             stamp_text,
             fontsize=glass_line['font_size'],
             fontname='helv',
             color=(0.0, 0.0, 0.0),
         )
         highlight_rect = _stamp_highlight_rect(
-            page_width - 90, glass_line['y_base'], stamp_text, glass_line['font_size']
+            stamp_x, stamp_y, stamp_text, glass_line['font_size']
         )
 
         return {
@@ -285,15 +355,16 @@ def compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width):
     # No code found, OR a single code was found but isn't in glass_lookup —
     # fall back to stamping the area instead of a weight.
     stamp_text = f'[{area:.3f} m²]'
+    stamp_x, stamp_y = _stamp_position(glass_line, stamp_text, page_width)
     page.insert_text(
-        (page_width - 90, glass_line['y_base']),
+        (stamp_x, stamp_y),
         stamp_text,
         fontsize=glass_line['font_size'],
         fontname='helv',
         color=(0.0, 0.0, 0.0),
     )
     highlight_rect = _stamp_highlight_rect(
-        page_width - 90, glass_line['y_base'], stamp_text, glass_line['font_size']
+        stamp_x, stamp_y, stamp_text, glass_line['font_size']
     )
     label = lhg_code if lhg_code else 'No LHG code'
     return {
