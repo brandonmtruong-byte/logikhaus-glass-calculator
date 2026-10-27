@@ -1,0 +1,1571 @@
+import os
+import re
+import streamlit as st
+import pandas as pd
+import fitz
+
+from modules.styles import inject_css, render_header, render_eyebrow, render_step_row, render_active_step_header
+from modules.glass_weight import load_glass_lookup, load_glass_type_lookup
+from modules.frame_code_data import load_frame_codes, load_frame_rules
+from modules.config import TEMPLATE_XLSX_PATH, CERTIFICATE_TEMPLATE_PATH, WINDOW_CERT_TEMPLATE_DG_PATH, WINDOW_CERT_TEMPLATE_TG_PATH
+from modules.test_files import list_test_files, load_test_file
+from modules.certificate_creator import (
+    extract_quote_data, fill_certificate, fill_window_certificate, pick_window_cert_template_path,
+    WIND_RATING_CHECKBOX_MAP, BUSHFIRE_CHECKBOX_MAP, debug_quote_extraction,
+)
+from modules.lhh_image_lookup import get_hardware_loader
+from modules.steps import (
+    STEP_ORDER, STEP_LABELS,
+    apply_preflight, apply_logo, apply_mass, apply_frame, apply_legend, apply_text_replace,
+    apply_hardware_schedule,
+)
+from modules.xero_invoice_creator import extract_windows_quote_info, extract_blinds_quote_info, build_xero_invoice_text
+from modules.window_diagram import (draw_window_diagram, draw_window_diagram_pdf,
+                                    FRAME_COLOURS, DEFAULT_FRAME,
+                                    GLASS_PANE_WIDTHS, GLASS_TYPES, GLASS_COMBINATIONS,
+                                    GLASS_PATTERN_TYPES, GLASS_OTHER_COLOUR, GlassFill,
+                                    glass_codes_for, glass_fill_for_code,
+                                    glass_label_text, glass_exists)
+from modules.price_estimator import render_price_estimate
+
+# ── Page config ────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Logikhaus PDF Fixr",
+    page_icon="🪟",
+    layout="centered"
+)
+
+inject_css()
+render_header()
+
+# ── Sidebar: refresh shared data ─────────────────────────────────────────
+# Streamlit Cloud only shows "Clear cache" in the ⋮ menu to the app's owner,
+# so this gives everyone a way to pick up edits to the Google Sheets / Drive
+# folder without waiting for the caches to expire. It does what that menu
+# item does (clears Streamlit's data and resource caches), plus restarts
+# the background hardware loader (LHH sheet + Drive images), which keeps
+# its own data outside Streamlit's cache. The caches are shared by
+# everyone using the app, so a refresh applies to all users at once.
+#
+# Cooldown: Google limits how many Sheets reads the app's account can make
+# per minute (shared by everyone), and a refresh re-reads every sheet at
+# once, so it can only run once per REFRESH_COOLDOWN_S -- for everyone,
+# not per person.
+REFRESH_COOLDOWN_S = 60
+
+
+@st.cache_resource
+def _refresh_state():
+    """When "Refresh data" last ran, shared by every user of the app."""
+    return {"last": 0.0}
+
+
+with st.sidebar:
+    render_eyebrow("Data")
+    st.caption("Edited a Google Sheet or the Drive image folder? Refresh to load the "
+               "latest. This refreshes the data for everyone using the app.")
+    if st.button("Refresh data", key="refresh_data", use_container_width=True):
+        import time
+        wait_s = REFRESH_COOLDOWN_S - (time.time() - _refresh_state()["last"])
+        if wait_s > 0:
+            st.session_state["data_refresh_wait"] = int(wait_s) + 1
+        else:
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            # Clearing the resource cache also cleared the cooldown record,
+            # so it's recorded again straight after.
+            _refresh_state()["last"] = time.time()
+            try:
+                # Starts a fresh background load; the PDF Editor shows its
+                # progress (and any error) the same way as on a normal start-up.
+                get_hardware_loader(force=True)
+            except Exception:
+                pass
+            st.session_state["data_refreshed"] = True
+        st.rerun()
+    if st.session_state.pop("data_refreshed", False):
+        st.toast("Data refreshed - the latest sheet data is loading now.", icon="✅")
+    wait_s = st.session_state.pop("data_refresh_wait", None)
+    if wait_s:
+        st.toast(f"Data was refreshed less than a minute ago - try again in {wait_s} s. "
+                 "(Google limits how often the sheets can be read.)", icon="⏳")
+
+# ── View switcher ────────────────────────────────────────────────────────
+# Deliberately NOT st.tabs(): Streamlit executes every tab's body on every
+# rerun regardless of which one is visually shown, so st.tabs() alone
+# wouldn't stop switching to Certificate Creator from still hitting
+# Google Sheets for glass/frame data. This uses real if/elif branching on
+# session_state instead, so only the active view's code ever runs.
+if 'active_view' not in st.session_state:
+    st.session_state.active_view = 'PDF Modifier'
+
+col_view1, col_view2, col_view3, col_view4 = st.columns(4)
+with col_view1:
+    with st.container(key="tab_pdf_modifier"):
+        if st.button(
+            "PDF Editor", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'PDF Modifier' else "secondary",
+        ):
+            st.session_state.active_view = 'PDF Modifier'
+            st.rerun()
+with col_view2:
+    with st.container(key="tab_certificate_creator"):
+        if st.button(
+            "Certificate Creator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Certificate Creator' else "secondary",
+        ):
+            st.session_state.active_view = 'Certificate Creator'
+            st.rerun()
+with col_view3:
+    with st.container(key="tab_xero_invoice_creator"):
+        if st.button(
+            "Xero Invoice Creator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Xero Invoice Creator' else "secondary",
+        ):
+            st.session_state.active_view = 'Xero Invoice Creator'
+            st.rerun()
+with col_view4:
+    with st.container(key="tab_window_diagram"):
+        if st.button(
+            "Quote Estimator", use_container_width=True,
+            type="primary" if st.session_state.active_view == 'Quote Estimator' else "secondary",
+        ):
+            st.session_state.active_view = 'Quote Estimator'
+            st.rerun()
+
+st.markdown("---")
+
+# ── Preview renderers (table styling for the mass / frame steps) ───────────
+# Function definitions only -- harmless to leave outside the view branches
+# below, since defining a function has no side effects until it's called.
+
+def render_mass_preview(result, doc):
+    rows  = result['rows']
+    pages = result['pages']
+    if not rows:
+        st.info("No glass lines found on this document.")
+        return
+    # Raw Text and Page are only for the debug toggle below, and the
+    # '_'-prefixed keys (_skip, _highlight_rect) are internal -- none of
+    # them belong in the table.
+    df = pd.DataFrame([{k: v for k, v in r.items()
+                        if not k.startswith('_') and k not in ('Raw Text', 'Page')}
+                       for r in rows])
+
+    def highlight_row(row):
+        original = rows[row.name]
+        if original.get('_skip'):
+            return ['color: #888'] * len(row)
+        if 'No LHG' in str(row.get('Weight', '')) or 'skipped' in str(row.get('Weight', '')):
+            return ['color: #c0392b'] * len(row)
+        return [''] * len(row)
+
+    st.dataframe(df.style.apply(highlight_row, axis=1), use_container_width=True, hide_index=True)
+
+    weights = []
+    for r in rows:
+        if not r['_skip'] and 'kg' in str(r['Weight']):
+            try:
+                weights.append(float(r['Weight'].replace(' kg', '')))
+            except ValueError:
+                pass
+    if weights:
+        col1, col2 = st.columns(2)
+        col1.metric("Total glass items", len(rows))
+        col2.metric("Total estimated weight", f"{sum(weights):.1f} kg")
+
+    if pages:
+        show_images = st.toggle(
+            f"Show preview of {len(pages)} page(s)", value=False, key="mass_show_images"
+        )
+        if show_images:
+            # Draw highlights on a throwaway copy, never the real working
+            # doc -- doc.tobytes() + reopen keeps this purely visual with
+            # zero risk of touching what actually gets downloaded.
+            preview_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
+            highlight_rects = result.get('highlight_rects', {})
+            for pno in pages:
+                preview_page = preview_doc[pno - 1]
+                for rect in highlight_rects.get(pno, []):
+                    preview_page.draw_rect(
+                        rect, color=(0.85, 0.55, 0), width=1.2,
+                        fill=(1, 0.92, 0.55), fill_opacity=0.45, overlay=True
+                    )
+                pix = preview_page.get_pixmap(dpi=150)
+                st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
+            preview_doc.close()
+
+    # Same idea as the frame code step's raw block text: the size and glass
+    # lines exactly as read from the PDF. Separate pieces of one printed
+    # line are shown with ' | ' between them.
+    if st.toggle("Show raw text per glass line", value=False, key="mass_show_debug"):
+        for r in rows:
+            st.write(f"**Page {r.get('Page', '?')} · {r.get('Size', '')}** ({r.get('LHG Code', '')})")
+            st.code(r.get('Raw Text', ''), language=None)
+
+
+def render_frame_preview(result, doc):
+    rows  = result['rows']
+    pages = result['pages']
+    if not rows:
+        st.info("No windows found on this document.")
+        return
+    frame_df = pd.DataFrame(rows)
+
+    def highlight_frame_row(row):
+        if row.get('Frame Code') == 'ERROR':
+            return ['color: #c0392b'] * len(row)
+        return [''] * len(row)
+
+    display_df = frame_df.drop(columns=['Block Text', '_highlight_rect'], errors='ignore')
+    st.dataframe(display_df.style.apply(highlight_frame_row, axis=1), use_container_width=True, hide_index=True)
+
+    error_count = sum(1 for r in rows if r['Frame Code'] == 'ERROR')
+    if error_count:
+        st.warning(f'{error_count} window(s) could not be matched to a frame code- see Details below.')
+
+    if pages:
+        show_images = st.toggle(
+            f"Show preview of {len(pages)} page(s)", value=False, key="frame_show_images"
+        )
+        if show_images:
+            # Same throwaway-copy pattern as the mass preview above.
+            preview_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
+            highlight_rects = result.get('highlight_rects', {})
+            for pno in pages:
+                preview_page = preview_doc[pno - 1]
+                for rect in highlight_rects.get(pno, []):
+                    preview_page.draw_rect(
+                        rect, color=(0.85, 0.55, 0), width=1.2,
+                        fill=(1, 0.92, 0.55), fill_opacity=0.45, overlay=True
+                    )
+                pix = preview_page.get_pixmap(dpi=150)
+                st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
+            preview_doc.close()
+
+    if st.toggle("Show raw block text per window", value=False, key="frame_show_debug"):
+        for r in rows:
+            st.write(f"**{r['Window']}** ({r['Frame Code']})")
+            st.code(r.get('Block Text', ''), language=None)
+
+
+def render_text_replace_preview(result):
+    st.markdown(
+        f'<div class="status-box">✓ {result["replaced"]} replacement(s), '
+        f'{result["deleted"]} deletion(s), across page(s) '
+        f'{result["pages"] if result["pages"] else "none"}</div>',
+        unsafe_allow_html=True
+    )
+
+    if result["not_found_warnings"]:
+        st.warning("Some instructions may need a closer look- either they "
+                   "didn't match anything, or they matched some but missed a similar variant:")
+        for w in result["not_found_warnings"]:
+            st.write(f"- {w}")
+
+    if result["overlap_warnings"]:
+        st.warning("Possible text overlap detected- review these pages before continuing:")
+        for pno, page_warnings in result["overlap_warnings"].items():
+            for w in page_warnings:
+                st.write(f"- Page {pno}: {w}")
+
+    if result["preview_images"]:
+        show_images = st.toggle(
+            f"Show preview of {len(result['preview_images'])} changed page(s)",
+            value=False, key="text_replace_show_images"
+        )
+        if show_images:
+            for pno in sorted(result["preview_images"]):
+                st.image(result["preview_images"][pno], caption=f"Page {pno}", use_container_width=True)
+
+
+def render_hardware_schedule_preview(result, doc):
+    codes = result.get('codes', [])
+    pages_added = result.get('pages_added', 0)
+    if not codes:
+        st.info("No LHH codes found on this document.")
+        return
+    st.write(f"Found {len(codes)} hardware code(s): {', '.join(codes)}")
+    if pages_added:
+        show_images = st.toggle(
+            f"Show preview of {pages_added} generated page(s)", value=False, key="hardware_schedule_show_images"
+        )
+        if show_images:
+            # These are brand-new appended pages, not stamps on existing
+            # ones -- safe to render straight from the real doc, no
+            # throwaway copy needed since nothing extra gets drawn here.
+            total_pages = doc.page_count
+            start_page = total_pages - pages_added + 1
+            for pno in range(start_page, total_pages + 1):
+                pix = doc[pno - 1].get_pixmap(dpi=150)
+                st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
+
+
+def render_preflight_status(result):
+    """One line under the upload: what the automatic PDF clean-up did."""
+    if not result:
+        return
+    if result.get('error'):
+        st.warning("The automatic PDF clean-up couldn't process this file, so it's being used "
+                   "as uploaded. Text on lines the Schedule Text Editor doesn't change may "
+                   f"shift slightly. ({result['error']})")
+        return
+    fixed = result.get('fixed', {})
+    if not fixed:
+        return   # nothing needed fixing -- nothing to say
+    total = sum(fixed.values())
+    pages = ", ".join(str(p) for p in fixed)
+    st.markdown(f'<div class="status-box">✓ PDF cleaned up automatically: fixed {total} risky line '
+                f'reset{"s" if total != 1 else ""} (page{"s" if len(fixed) != 1 else ""} {pages}), '
+                f'so edits will no longer shift text. The pages look exactly the same.</div>',
+                unsafe_allow_html=True)
+
+
+def render_legend_preview(status):
+    if status == 'added':
+        st.markdown('<div class="status-box">✓ Legend page appended to end of quote</div>', unsafe_allow_html=True)
+    elif status == 'already_present':
+        st.markdown('<div class="status-box">Legend page already present- not duplicated</div>',
+                     unsafe_allow_html=True)
+    elif status == 'missing_file':
+        st.warning('LEGEND page for Schedule.pdf not found in assets/templates - legend page was not added.')
+
+
+def start_new_document(file_bytes, file_name, unique_id):
+    """
+    (Re)initialize the stepper session state for a new document -- shared
+    by both a real upload and the dev-only test file picker below, so the
+    two paths can never drift apart or process a file differently.
+    """
+    if st.session_state.get('doc') is not None:
+        st.session_state.doc.close()
+    st.session_state.uploaded_file_id = unique_id
+    st.session_state.doc              = fitz.open(stream=file_bytes, filetype="pdf")
+
+    # PDF clean-up, automatically on every new file, before any step edits
+    # it (see pdf_preflight.py). If the clean-up can't handle a particular
+    # PDF, carry on with the original file rather than blocking the upload.
+    try:
+        cleaned = apply_preflight(st.session_state.doc)
+        if cleaned['doc'] is not st.session_state.doc:
+            st.session_state.doc.close()
+            st.session_state.doc = cleaned['doc']
+        st.session_state.preflight_result = {'fixed': cleaned['fixed'], 'error': None}
+    except Exception as e:
+        st.session_state.preflight_result = {'fixed': {}, 'error': f"{type(e).__name__}: {e}"}
+
+    st.session_state.file_name        = file_name
+    st.session_state.current_step     = 0
+    st.session_state.step_status      = {k: 'pending' for k in STEP_ORDER}
+    st.session_state.step_results     = {}
+
+
+def sanitize_filename_part(text):
+    """
+    Strip characters that are invalid (or awkward) in a filename, for
+    building download filenames out of free text like a client name.
+    Collapses whitespace and trims, so "Caitlin & Chris  Morey" becomes
+    "Caitlin & Chris Morey" rather than leaving double spaces.
+    """
+    cleaned = re.sub(r'[<>:"/\\|?*]', '', text)
+    return re.sub(r'\s+', ' ', cleaned).strip()
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: PDF MODIFIER — the existing stepper flow, entirely unchanged
+# ═════════════════════════════════════════════════════════════════════════
+if st.session_state.active_view == 'PDF Modifier':
+
+    # ── Hardware data (sheet + Drive images): start loading in the BACKGROUND.
+    # get_hardware_loader() returns immediately; nothing needs this data until
+    # the Hardware Schedule step, so uploading a schedule and running the first
+    # few steps can happen while it loads. Started before the glass/frame loads
+    # below so it's already running during them.
+    hw_loader, hw_start_error = None, None
+    try:
+        hw_loader = get_hardware_loader()
+    except Exception as e:
+        hw_start_error = f'{type(e).__name__}: {e}'
+
+    # ── Load reference data (Google Sheets - independent of any uploaded PDF)
+    try:
+        with st.spinner('Loading glass data from sheet...'):
+            glass_lookup      = load_glass_lookup()
+            glass_type_lookup = load_glass_type_lookup()
+        st.markdown(f'<div class="status-box">✓ Glass database loaded - {len(glass_lookup)} codes</div>',
+                    unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f'Could not connect to Google Sheets: {type(e).__name__}: {e}')
+        import traceback
+        st.code(traceback.format_exc())
+        st.stop()
+
+    frame_codes, frame_rules = None, None
+    try:
+        with st.spinner('Loading frame code data...'):
+            frame_codes = load_frame_codes()
+            frame_rules = load_frame_rules()
+        st.markdown(
+            f'<div class="status-box">✓ Frame code data loaded - '
+            f'{len(frame_codes)} codes, {len(frame_rules)} rules</div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.warning(f'Could not load frame code sheet- the Frame Code Matcher step will be skippable only. '
+                   f'({type(e).__name__}: {e})')
+
+    # Hardware status. This is a snapshot taken on each run (it does NOT refresh
+    # by itself -- an auto-refreshing box could interrupt a step part-way through
+    # applying); it updates the next time anything on the page is clicked.
+    hw = hw_loader.snapshot() if hw_loader else None
+    hw_data = hw_loader.data() if hw_loader else None      # (lookup, images, image_cache) or None
+    lhh_lookup, lhh_drive_images, lhh_image_cache = hw_data if hw_data else (None, None, None)
+
+    if hw is None:
+        st.warning(f'Could not start hardware lookup- the Hardware Schedule step will be skippable only. '
+                   f'({hw_start_error})')
+    elif hw['ready']:
+        caching = (f" - caching images in the background ({hw['cached']}/{hw['prefetch_total']})"
+                   if hw['prefetching'] else "")
+        st.markdown(
+            f'<div class="status-box">✓ Hardware lookup loaded - '
+            f'{hw["codes"]} codes, {hw["images"]} images{caching}</div>',
+            unsafe_allow_html=True
+        )
+    elif hw['status'] == 'error':
+        st.warning(f'Could not load hardware lookup- the Hardware Schedule step will be skippable only. '
+                   f'({hw["error"]})')
+        if st.button('Retry hardware load', key='hw_retry', type='secondary'):
+            get_hardware_loader(force=True)
+            st.rerun()
+    else:
+        st.markdown(
+            f'<div class="status-box">⏳ Hardware data is loading in the background '
+            f'({hw["stage"]}) - carry on, it will be ready by the Hardware Schedule step.</div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("---")
+
+    # ── Dev-only: load a test file already committed to the repo ───────────
+    # Not part of the stepper flow in modules/steps.py -- this is purely a
+    # shortcut for getting bytes onto the screen, feeding into the exact
+    # same start_new_document() path a real upload uses below.
+    test_files = list_test_files()
+    if test_files:
+        with st.expander("Load a test file (dev only)", expanded=False):
+            selected_test_file = st.selectbox(
+                "Choose a file from the Test Files folder", test_files, key="test_file_select"
+            )
+            if st.button("Load test file", key="load_test_file_btn", type="secondary"):
+                start_new_document(
+                    load_test_file(selected_test_file),
+                    selected_test_file,
+                    f"testfile:{selected_test_file}",
+                )
+                st.session_state.test_file_loaded_message = selected_test_file
+                st.rerun()
+
+    if st.session_state.get('test_file_loaded_message'):
+        st.success(f"✓ Loaded test file: {st.session_state.test_file_loaded_message}")
+        del st.session_state['test_file_loaded_message']
+
+    # ── File upload ─────────────────────────────────────────────────────
+    render_eyebrow("Upload schedule")
+    uploaded = st.file_uploader(
+        "Drop a Logikhaus PDF schedule here",
+        type="pdf",
+        label_visibility="collapsed"
+    )
+
+    # New upload -> (re)initialize the stepper state. A test file may
+    # already have set st.session_state.doc above -- either way this only
+    # fires when uploaded is a genuinely new file, so it can't clobber a
+    # loaded test file.
+    if uploaded is not None and st.session_state.get('uploaded_file_id') != uploaded.file_id:
+        start_new_document(uploaded.read(), uploaded.name, uploaded.file_id)
+
+    if st.session_state.get('doc') is None:
+        st.stop()
+
+    doc = st.session_state.doc
+    render_preflight_status(st.session_state.get('preflight_result'))
+
+    st.markdown("---")
+
+    col_title, col_reset = st.columns([4, 1])
+    with col_title:
+        render_eyebrow("Processing steps")
+    with col_reset:
+        if st.button("Start Over", use_container_width=True, type="secondary"):
+            doc.close()
+            for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results',
+                        'preflight_result']:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+    # ── Stepper ──────────────────────────────────────────────────────────
+    for i, step_key in enumerate(STEP_ORDER):
+        label  = STEP_LABELS[step_key]
+        status = st.session_state.step_status[step_key]
+
+        # Already-passed step: collapsed one-line summary (✓ applied / ⏭ skipped)
+        if i < st.session_state.current_step:
+            render_step_row(i + 1, label, status)
+            continue
+
+        # Not-yet-reached step: locked placeholder
+        if i > st.session_state.current_step:
+            render_step_row(i + 1, label, 'locked')
+            continue
+
+        # ── The current active step- highlighted bordered container ─────
+        with st.container(border=True, key="active_step"):
+            render_active_step_header(i + 1, len(STEP_ORDER), label)
+
+            if status == 'pending':
+                # Frame step needs sheet data to be available at all
+                frame_data_missing = step_key == 'frame' and (frame_codes is None or frame_rules is None)
+                if frame_data_missing:
+                    st.warning("Frame code sheet isn't available- this step can only be skipped.")
+
+                # Hardware Schedule step needs its lookup data available too
+                hardware_data_missing = step_key == 'hardware_schedule' and (
+                    lhh_lookup is None or lhh_drive_images is None
+                )
+                if hardware_data_missing:
+                    if hw and hw['status'] == 'loading':
+                        st.info(f"Hardware data is still loading in the background ({hw['stage']}). "
+                                "Click Check again in a moment, or Skip.")
+                        st.button("Check again", key="hw_check_again", type="secondary")
+                    else:
+                        st.warning("Hardware lookup isn't available- this step can only be skipped.")
+
+                # Text replace step needs its own instructions .xlsx uploaded first
+                text_replace_xlsx = None
+                if step_key == 'text_replace':
+                    if os.path.exists(TEMPLATE_XLSX_PATH):
+                        with open(TEMPLATE_XLSX_PATH, "rb") as f:
+                            st.download_button(
+                                "Download blank instructions template (.xlsx)",
+                                data=f.read(),
+                                file_name="template_instructions.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"template_download_{step_key}",
+                            )
+                    text_replace_xlsx = st.file_uploader(
+                        "Instructions spreadsheet (.xlsx)", type="xlsx", key=f"xlsx_upload_{step_key}"
+                    )
+
+                text_replace_missing = step_key == 'text_replace' and text_replace_xlsx is None
+                apply_disabled = frame_data_missing or hardware_data_missing or text_replace_missing
+
+                col_apply, col_skip = st.columns([3, 1])
+                with col_apply:
+                    apply_clicked = st.button(
+                        f"Apply {label}", key=f"apply_{step_key}",
+                        use_container_width=True, disabled=apply_disabled, type="primary",
+                    )
+                with col_skip:
+                    skip_clicked = st.button(
+                        "Skip", key=f"skip_{step_key}", use_container_width=True, type="secondary",
+                    )
+
+                if apply_clicked:
+                    with st.spinner(f'Applying {label}...'):
+                        if step_key == 'logo':
+                            apply_logo(doc)
+                            st.session_state.step_results[step_key] = None
+                        elif step_key == 'text_replace':
+                            result = apply_text_replace(doc, text_replace_xlsx.getvalue())
+                            st.session_state.doc = result.pop('doc')
+                            st.session_state.step_results[step_key] = result
+                        elif step_key == 'mass':
+                            st.session_state.step_results[step_key] = apply_mass(doc, glass_lookup)
+                        elif step_key == 'frame':
+                            st.session_state.step_results[step_key] = apply_frame(
+                                doc, frame_codes, frame_rules, glass_type_lookup
+                            )
+                        elif step_key == 'hardware_schedule':
+                            st.session_state.step_results[step_key] = apply_hardware_schedule(
+                                doc, lhh_lookup, lhh_drive_images, lhh_image_cache
+                            )
+                        elif step_key == 'legend':
+                            st.session_state.step_results[step_key] = apply_legend(doc)
+                    st.session_state.step_status[step_key] = 'applied'
+                    st.rerun()
+
+                if skip_clicked:
+                    st.session_state.step_status[step_key] = 'skipped'
+                    st.session_state.current_step += 1
+                    st.rerun()
+
+            elif status == 'applied':
+                result = st.session_state.step_results.get(step_key)
+
+                st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
+
+                with st.expander("View details", expanded=False):
+                    if step_key == 'logo':
+                        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
+                        st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
+                    elif step_key == 'text_replace':
+                        render_text_replace_preview(result)
+                    elif step_key == 'mass':
+                        render_mass_preview(result, doc)
+                    elif step_key == 'frame':
+                        render_frame_preview(result, doc)
+                    elif step_key == 'hardware_schedule':
+                        render_hardware_schedule_preview(result, doc)
+                    elif step_key == 'legend':
+                        render_legend_preview(result)
+
+                if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True, type="primary"):
+                    st.session_state.current_step += 1
+                    st.rerun()
+
+    # ── All steps done: download ────────────────────────────────────────
+    if st.session_state.current_step >= len(STEP_ORDER):
+        render_eyebrow("All steps complete")
+        # Work on a copy so the in-app document isn't altered on every rerun.
+        out_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
+        # Shrink images to ~1000 ppi at the size they're printed (sharp on
+        # screen when zoomed; ~5 MB with 10 product photos). The product
+        # photos arrive at ~2000 ppi, far more detail than needed.
+        out_doc.rewrite_images(dpi_threshold=1050, dpi_target=1000, quality=95,
+                               lossy=True, lossless=True)
+        # Compress everything (inserted PNGs are otherwise stored as raw
+        # pixels) and drop duplicate/unused objects.
+        out_bytes = out_doc.tobytes(garbage=3, deflate=True)
+        out_doc.close()
+        out_name  = st.session_state.file_name.replace('.pdf', '_processed.pdf')
+        st.download_button(
+            label="Download annotated PDF",
+            data=out_bytes,
+            file_name=out_name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: CERTIFICATE CREATOR — fully independent, no editor state touched
+# ═════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_view == 'Certificate Creator':
+
+    render_eyebrow("Upload quote")
+    cert_uploaded = st.file_uploader(
+        "Drop a quote PDF here", type="pdf", label_visibility="collapsed", key="cert_uploader"
+    )
+
+    # Auto-scan the moment a new quote is uploaded -- no button needed.
+    if cert_uploaded is not None and st.session_state.get('cert_uploaded_file_id') != cert_uploaded.file_id:
+        st.session_state.cert_uploaded_file_id = cert_uploaded.file_id
+        st.session_state.cert_quote_bytes      = cert_uploaded.read()
+
+        quote_doc = fitz.open(stream=st.session_state.cert_quote_bytes, filetype="pdf")
+        try:
+            detected = extract_quote_data(quote_doc)
+        except NotImplementedError:
+            detected = {}
+            st.info("Quote scanning isn't built yet- fill in the fields below by hand.")
+        st.session_state.cert_debug_extraction = debug_quote_extraction(quote_doc)
+        quote_doc.close()
+
+        st.session_state.cert_client       = detected.get('client', '') or ''
+        # Kept separate from cert_client: this is the raw value straight
+        # off the quote's own "Client:" line, used for filenames so it
+        # stays correct even if the Client field above gets hand-edited.
+        st.session_state.cert_client_quote_field = detected.get('client_quote_field', '') or ''
+        st.session_state.cert_site         = detected.get('site', '') or ''
+        st.session_state.cert_date         = detected.get('date', '') or ''
+        st.session_state.cert_completed_on = ''  # never auto-detected -- always left for manual entry
+        st.session_state.cert_delivered_on = ''  # same -- always left for manual entry
+
+        # Detected but not user-editable -- these drive the Window
+        # Compliance certificate's checkboxes and template choice
+        # directly, there's no free-text field for them in the UI.
+        st.session_state.cert_site_wind_rating = detected.get('site_wind_rating')
+        st.session_state.cert_bushfire_rating  = detected.get('bushfire_rating')
+        st.session_state.cert_glazing_type     = detected.get('glazing_type')
+
+        # Tracked once at scan time, not re-derived from the (editable)
+        # fields below -- so a person clearing a field by hand afterward
+        # doesn't get mistaken for "the scan couldn't find this."
+        field_labels = {
+            'client':           'Client',
+            'site':             'Site',
+            'bushfire_rating':  'Bushfire Rating',
+            'site_wind_rating': 'Site Wind Rating',
+            'glazing_type':     'Glazing Type',
+        }
+        st.session_state.cert_missing_fields = [
+            label for key, label in field_labels.items() if not detected.get(key)
+        ]
+
+    if st.session_state.get('cert_quote_bytes') is None:
+        st.stop()
+
+    render_eyebrow("Detected fields - edit if needed")
+    st.session_state.cert_client       = st.text_input("Client", value=st.session_state.get('cert_client', ''))
+    st.session_state.cert_site         = st.text_input("Site", value=st.session_state.get('cert_site', ''))
+
+    # One-hot selections, same "prefilled but editable" idea as the text
+    # fields above -- a selectbox rather than free text since these must
+    # match one of the certificate's actual checkbox options exactly.
+    # "No Match" is a genuine third state, not just a filler option: it
+    # tells fill_window_certificate() to leave the WHOLE group off
+    # rather than silently defaulting to N1/BAL LOW as if that had been
+    # confidently detected -- see WIND_RATING_CHECKBOX_MAP /
+    # BUSHFIRE_CHECKBOX_MAP, "No Match" isn't a key in either, so the
+    # one-hot loop there naturally sets every box in the group to /Off.
+    wind_options = list(WIND_RATING_CHECKBOX_MAP.keys()) + ['No Match']
+    detected_wind = st.session_state.get('cert_site_wind_rating')
+    wind_index = wind_options.index(detected_wind) if detected_wind in wind_options else wind_options.index('No Match')
+    st.session_state.cert_site_wind_rating = st.selectbox(
+        "Site Wind Rating", wind_options, index=wind_index
+    )
+
+    bushfire_options = list(BUSHFIRE_CHECKBOX_MAP.keys()) + ['No Match']
+    detected_bushfire = st.session_state.get('cert_bushfire_rating')
+    bushfire_index = (
+        bushfire_options.index(detected_bushfire) if detected_bushfire in bushfire_options
+        else bushfire_options.index('No Match')
+    )
+    st.session_state.cert_bushfire_rating = st.selectbox(
+        "Bushfire Rating", bushfire_options, index=bushfire_index
+    )
+
+    # Unlike the two groups above, "No Match" here can't just mean "leave
+    # it off" -- glazing type picks WHICH TEMPLATE FILE gets used, so
+    # there's no equivalent "generate anyway with nothing selected"
+    # option. Selecting "No Match" instead blocks the Window Compliance
+    # download specifically further down, with a clear message, rather
+    # than silently falling back to the DG template as it did before.
+    glazing_options = ['DG', 'TG', 'No Match']
+    detected_glazing = st.session_state.get('cert_glazing_type')
+    glazing_index = (
+        glazing_options.index(detected_glazing) if detected_glazing in glazing_options
+        else glazing_options.index('No Match')
+    )
+    st.session_state.cert_glazing_type = st.selectbox(
+        "Glazing Type", glazing_options, index=glazing_index
+    )
+
+    st.session_state.cert_completed_on = st.text_input(
+        "Completed on", value=st.session_state.get('cert_completed_on', '')
+    )
+    st.session_state.cert_delivered_on = st.text_input(
+        "Delivered on", value=st.session_state.get('cert_delivered_on', '')
+    )
+    st.session_state.cert_date         = st.text_input("Date", value=st.session_state.get('cert_date', ''))
+
+    if st.session_state.get('cert_missing_fields'):
+        st.warning(f"Information not found for: {', '.join(st.session_state.cert_missing_fields)}")
+
+    debug_info = st.session_state.get('cert_debug_extraction')
+    if debug_info:
+        with st.expander("Debug: what the reader found for each field"):
+            debug_labels = {
+                'client_line':    'Client',
+                'dear_line':      'Dear',
+                'project_block':  'Project',
+                'site_wind_line': 'Wind rating',
+                'bushfire_line':  'Bushfire rating',
+            }
+            for key, label in debug_labels.items():
+                value = debug_info.get(key)
+                if value:
+                    st.write(f"**{label}:**")
+                    st.code(value, language=None)
+                else:
+                    st.write(f"**{label}:** not found")
+
+    st.markdown("---")
+
+    # Generate + download in one click: the filled PDF is (cheaply)
+    # rebuilt from whatever's currently in the fields on every rerun, so
+    # it's always ready the instant this button renders -- no separate
+    # "Generate" step before the download becomes available.
+    if os.path.exists(CERTIFICATE_TEMPLATE_PATH):
+        with open(CERTIFICATE_TEMPLATE_PATH, "rb") as f:
+            template_bytes = f.read()
+        filled_bytes = fill_certificate(template_bytes, {
+            'client':       st.session_state.cert_client,
+            'site':         st.session_state.cert_site,
+            'completed_on': st.session_state.cert_completed_on,
+            'date':         st.session_state.cert_date,
+        })
+        st.download_button(
+            "Generate and download Glass Compliance Certificate",
+            data=filled_bytes,
+            file_name=f"Glass_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client_quote_field)}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+    else:
+        st.error("Certificate template not found in the app folder.")
+
+    glazing_selection = st.session_state.get('cert_glazing_type')
+    if glazing_selection == 'No Match':
+        st.warning("Select a Glazing Type (DG or TG) to generate the Window Compliance Certificate.")
+    else:
+        window_cert_path = pick_window_cert_template_path(
+            WINDOW_CERT_TEMPLATE_DG_PATH, WINDOW_CERT_TEMPLATE_TG_PATH,
+            glazing_selection,
+        )
+        if os.path.exists(window_cert_path):
+            with open(window_cert_path, "rb") as f:
+                window_template_bytes = f.read()
+            window_filled_bytes = fill_window_certificate(window_template_bytes, {
+                'client':            st.session_state.cert_client,
+                'site':              st.session_state.cert_site,
+                'delivered_on':      st.session_state.cert_delivered_on,
+                'date':              st.session_state.cert_date,
+                'site_wind_rating':  st.session_state.get('cert_site_wind_rating'),
+                'bushfire_rating':   st.session_state.get('cert_bushfire_rating'),
+            })
+            st.download_button(
+                "Generate and download Window Compliance Certificate",
+                data=window_filled_bytes,
+                file_name=f"Window_Compliance_Certificate_{sanitize_filename_part(st.session_state.cert_client_quote_field)}.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+            )
+        else:
+            st.error("Window Compliance Certificate template not found in assets/certificates.")
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: XERO INVOICE CREATOR — fully independent, no other view's state touched
+# ═════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_view == 'Xero Invoice Creator':
+
+    render_eyebrow("Upload quotes")
+    st.caption("Either quote can be left out if that job type doesn't apply -- upload whichever you have.")
+    col_w, col_b = st.columns(2)
+    with col_w:
+        windows_uploaded = st.file_uploader(
+            "Windows quote", type="pdf", key="xero_windows_uploader"
+        )
+    with col_b:
+        blinds_uploaded = st.file_uploader(
+            "Blinds quote", type="pdf", key="xero_blinds_uploader"
+        )
+
+    process_clicked = st.button(
+        "Process", type="primary", use_container_width=True,
+        disabled=(windows_uploaded is None and blinds_uploaded is None),
+    )
+
+    if process_clicked:
+        windows_info = None
+        if windows_uploaded is not None:
+            windows_doc = fitz.open(stream=windows_uploaded.read(), filetype="pdf")
+            windows_info = extract_windows_quote_info(windows_doc)
+            windows_doc.close()
+
+        blinds_info = None
+        if blinds_uploaded is not None:
+            blinds_doc = fitz.open(stream=blinds_uploaded.read(), filetype="pdf")
+            blinds_info = extract_blinds_quote_info(blinds_doc)
+            blinds_doc.close()
+
+        st.session_state.xero_windows_info = windows_info
+        st.session_state.xero_blinds_info  = blinds_info
+        # Snapshot exactly which files were processed, by identity -- used
+        # below to detect ANY change (added, removed, or swapped for a
+        # different file) since this click, in either slot independently.
+        st.session_state.xero_processed_windows_id = windows_uploaded.file_id if windows_uploaded else None
+        st.session_state.xero_processed_blinds_id  = blinds_uploaded.file_id if blinds_uploaded else None
+
+    if 'xero_windows_info' not in st.session_state and 'xero_blinds_info' not in st.session_state:
+        st.info("Upload at least one quote, then click Process.")
+        st.stop()
+
+    # Retract the output the moment EITHER slot's current file no longer
+    # matches what was actually processed -- covers a file being removed,
+    # added, or swapped for a different one, in either slot independently.
+    # Merely changing what's uploaded never auto-regenerates the output;
+    # it only ever updates on an explicit Process click.
+    current_windows_id = windows_uploaded.file_id if windows_uploaded else None
+    current_blinds_id  = blinds_uploaded.file_id if blinds_uploaded else None
+    if (current_windows_id != st.session_state.get('xero_processed_windows_id')
+            or current_blinds_id != st.session_state.get('xero_processed_blinds_id')):
+        st.info("Quotes have changed since the last Process click -- click Process to update.")
+        st.stop()
+
+    windows_info = st.session_state.get('xero_windows_info')
+    blinds_info  = st.session_state.get('xero_blinds_info')
+
+    # A missing FIELD within a quote that WAS uploaded is a real gap,
+    # worth flagging -- unlike a quote that wasn't uploaded at all
+    # (handled by build_xero_invoice_text() simply omitting that item).
+    missing = []
+    if windows_info is not None:
+        if not windows_info.get('client'):
+            missing.append('Client name (windows quote)')
+        if not windows_info.get('site'):
+            missing.append('Site address (windows quote)')
+        if not windows_info.get('price'):
+            missing.append('Sub Total (windows quote)')
+    if blinds_info is not None and not blinds_info.get('price'):
+        missing.append('Amount (blinds quote)')
+    if missing:
+        st.warning(f"Information not found for: {', '.join(missing)}")
+
+    invoice_text = build_xero_invoice_text(windows_info, blinds_info)
+
+    st.markdown("---")
+    render_eyebrow("Generated invoice text")
+    st.code(invoice_text, language=None)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  VIEW: QUOTE ESTIMATOR (window diagram + price estimate) — fully independent, no other view's state touched
+# ═════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_view == 'Quote Estimator':
+
+    # Two halves: options on the left, the diagram on the right. The
+    # diagram's column stays in view while the options are scrolled (see
+    # the "window_diagram_panel" rule in styles.py).
+    col_options, col_diagram = st.columns(2, gap="medium")
+
+    # ── Panel-based options ─────────────────────────────────────────────
+    # The window is a row of 1-3 panels, and each panel has ONE type. Each
+    # type shows only the options that apply to it. With 2 or 3 panels,
+    # each panel's options are in its own tab.
+    #
+    # Panels are stored by POSITION ("left" / "middle" / "right") in
+    # st.session_state["window_diagram_panels"], not only in widget state:
+    # Streamlit forgets the state of any widget that isn't drawn on a run
+    # (e.g. the right panel's while showing 1 panel), and storing by
+    # position means switching between 2 and 3 panels never moves one
+    # panel's settings onto another.
+    WINDOW_PANEL_TYPES = ["Fixed", "Side-hung", "Tilt & turn", "Tilt only", "French doors",
+                          "Sliding", "Double sliding"]
+    WINDOW_SLIDE_TILT = ["None", "Tilt", "Tilt & turn"]
+    WINDOW_SIDES = ["Left", "Right"]
+    WINDOW_POSITIONS = {1: ["left"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
+
+    if not isinstance(st.session_state.get("window_diagram_panels"), dict):
+        st.session_state["window_diagram_panels"] = {}
+    panels = st.session_state["window_diagram_panels"]
+    # Default handles face the middle, so neighbouring openers meet there.
+    # Default handle side per position: facing the middle, so neighbouring
+    # openers meet there.
+    WINDOW_DEFAULT_HANDLES = {"left": "Right", "middle": "Right", "right": "Left"}
+    for _pos, _handle in WINDOW_DEFAULT_HANDLES.items():
+        panels.setdefault(_pos, {"type": "Fixed", "handle_side": _handle, "slide_tilt": "None"})
+
+    # Fixed bottom section: default top height as a fraction of the window
+    # height (rounded to 10 mm), used until a top height is typed in.
+    WINDOW_DEFAULT_TOP_RATIO = 0.7
+
+    def window_top_mm(panel, height_mm):
+        """
+        Top-section height for a panel with a fixed bottom section: the one
+        typed in, or the default. Falls back to the default if the window
+        height has shrunk so far that the typed one no longer fits.
+        """
+        top = panel.get("top_mm")
+        if top is not None and 1 <= top <= height_mm - 1:
+            return int(top)
+        panel["top_mm"] = None
+        default = int(round(height_mm * WINDOW_DEFAULT_TOP_RATIO / 10) * 10)
+        return min(max(default, 1), height_mm - 1)
+
+    def _window_top_changed(pos):
+        st.session_state["window_diagram_panels"][pos]["top_mm"] = \
+            st.session_state[f"window_diagram_top_height_{pos}"]
+
+    def window_panel_controls(pos, positions, height_mm):
+        """Type + the options for that type, for the panel at `pos`."""
+        # Every option is always available, whatever the other panels are
+        # set to. Combinations the drawing can't make are reported by
+        # window_layout_problems() below, instead of being prevented here.
+        panel = panels[pos]
+        type_key = f"window_diagram_type_{pos}"
+        # Widgets get their starting value through session state (not
+        # index=), so Streamlit doesn't warn about a value being set both
+        # ways when the Quote Estimator pushes a panel type in.
+        if st.session_state.get(type_key) not in WINDOW_PANEL_TYPES:
+            st.session_state[type_key] = panel["type"]
+        panel["type"] = st.selectbox("Type", WINDOW_PANEL_TYPES, key=type_key)
+
+        show_handle = panel["type"] in ("Side-hung", "Tilt & turn", "French doors")
+        if panel["type"] == "Double sliding":
+            st.caption("Two equal doors, each sliding outward over the panel beside it.")
+        if panel["type"] == "Sliding":
+            if len(positions) == 2:
+                other = positions[1 - positions.index(pos)]
+                st.caption(f"Slides towards the {other} panel.")
+            tilt_key = f"window_diagram_slide_tilt_{pos}"
+            if st.session_state.get(tilt_key) not in WINDOW_SLIDE_TILT:
+                st.session_state[tilt_key] = panel["slide_tilt"]
+            panel["slide_tilt"] = st.radio(
+                "Tilt", WINDOW_SLIDE_TILT, horizontal=True, key=tilt_key,
+            )
+            # The handle side sets which way the side-hung lines point.
+            show_handle = panel["slide_tilt"] == "Tilt & turn"
+        if show_handle:
+            handle_key = f"window_diagram_handle_side_{pos}"
+            if st.session_state.get(handle_key) not in WINDOW_SIDES:
+                st.session_state[handle_key] = panel["handle_side"]
+            panel["handle_side"] = st.radio(
+                "Handle side", WINDOW_SIDES, horizontal=True, key=handle_key,
+                # French doors: the two doors are always exactly half each;
+                # this only picks which one has the handle.
+                help=("Which of the two doors has the handle."
+                      if panel["type"] == "French doors" else None),
+            )
+
+        # Fixed bottom section: splits this panel with a transom. The type
+        # above applies to the top section; the bottom is always fixed.
+        # (Only hidden on windows under 2 mm tall, which can't be split.)
+        if height_mm >= 2:
+            bottom_key = f"window_diagram_bottom_{pos}"
+            if bottom_key not in st.session_state:
+                st.session_state[bottom_key] = panel.get("bottom", False)
+            panel["bottom"] = st.checkbox("Fixed bottom section", key=bottom_key)
+            if panel["bottom"]:
+                top_mm = window_top_mm(panel, height_mm)
+                st.session_state[f"window_diagram_top_height_{pos}"] = top_mm
+                st.session_state[f"window_diagram_bottom_height_{pos}"] = height_mm - top_mm
+                window_mm_input(
+                    "Top height (mm)", f"window_diagram_top_height_{pos}",
+                    WINDOW_SLIDER_MAX_HEIGHT_MM, max_value=height_mm - 1,
+                    on_change=_window_top_changed, args=(pos,),
+                )
+                with st.container(key=f"wdnum_window_diagram_bottom_height_{pos}"):
+                    st.number_input(
+                        "Bottom height (mm)", step=10, disabled=True,
+                        key=f"window_diagram_bottom_height_{pos}",
+                        help="The bottom section takes up the rest of the height.",
+                    )
+
+    # Panel widths. Only the widths that can be typed in are stored (None
+    # = default); the rest is always "overall width minus those", so the
+    # panels always add up to the overall width.
+    #   2 panels: left is stored (default half); right = the rest. Both
+    #             boxes are editable and update each other.
+    #   3 panels: left and right are stored (default thirds); the middle
+    #             takes up whatever is left and isn't editable.
+    # These callbacks run before the script, so the boxes they affect show
+    # the new value straight away.
+    def _window_two_left_changed():
+        st.session_state["window_diagram_split_left_mm"] = \
+            st.session_state["window_diagram_panel_width_left"]
+
+    def _window_two_right_changed():
+        st.session_state["window_diagram_split_left_mm"] = (
+            st.session_state["window_diagram_width"]
+            - st.session_state["window_diagram_panel_width_right"]
+        )
+
+    def _window_three_side_changed(pos):
+        st.session_state[f"window_diagram_three_{pos}_mm"] = \
+            st.session_state[f"window_diagram_panel_width_{pos}"]
+
+    # "Equal" panel widths: French doors and Double sliding are one panel
+    # holding TWO doors, so they count double. Then every door / pane comes
+    # out the same width, e.g. Fixed | Double sliding | Fixed on 5500 gives
+    # 1375 | 2750 | 1375 -- four 1375 leaves.
+    WINDOW_DOUBLE_TYPES = ("French doors", "Double sliding")
+
+    def window_current_type(pos):
+        """
+        A panel's type as currently chosen. Its dropdown's value is already
+        up to date in session state at the start of a run, even before the
+        dropdown is drawn (which happens after the widths are worked out).
+        """
+        return st.session_state.get(f"window_diagram_type_{pos}", panels[pos]["type"])
+
+    def window_equal_widths(positions, total_mm):
+        """
+        {position: width in whole mm} for "equal" widths, with double-door
+        panels counted twice. Adds up to total_mm exactly: the middle panel
+        (3 panels) or the right panel (2 panels) takes any rounding leftover.
+        """
+        units = {pos: 2 if window_current_type(pos) in WINDOW_DOUBLE_TYPES else 1
+                 for pos in positions}
+        total_units = sum(units.values())
+        widths = {pos: max(int(total_mm * units[pos] // total_units), 1) for pos in positions}
+        filler = "middle" if "middle" in positions else positions[-1]
+        widths[filler] = total_mm - sum(w for pos, w in widths.items() if pos != filler)
+        return widths
+
+    def _window_equalise_widths():
+        """
+        "Equalise widths" button: forget any widths typed in or slid to, so
+        the panels go back to equal (see window_equal_widths()). Panel types
+        and everything else stay as they are.
+        """
+        st.session_state["window_diagram_split_left_mm"] = None
+        st.session_state["window_diagram_three_left_mm"] = None
+        st.session_state["window_diagram_three_right_mm"] = None
+
+    def _window_reset():
+        """
+        "Reset" button: every panel back to a plain Fixed panel (no bottom
+        section, default handle side and tilt), and the panel widths back
+        to equal. Keeps the number of panels and the overall width/height.
+        Runs as a button callback, i.e. before the widgets are drawn, so
+        it can set their values directly.
+        """
+        for pos, handle in WINDOW_DEFAULT_HANDLES.items():
+            panels[pos] = {"type": "Fixed", "handle_side": handle, "slide_tilt": "None",
+                           "bottom": False, "top_mm": None}
+            st.session_state[f"window_diagram_type_{pos}"] = "Fixed"
+            st.session_state[f"window_diagram_bottom_{pos}"] = False
+            st.session_state[f"window_diagram_handle_side_{pos}"] = handle
+            st.session_state[f"window_diagram_slide_tilt_{pos}"] = "None"
+        # Equal widths: halves (2 panels) or thirds (3 panels).
+        _window_equalise_widths()
+
+    def window_opening(panel):
+        """
+        Drawing options for a panel (any type except the two-panel
+        "Sliding", which is drawn separately).
+        """
+        swing, tilt, tilt_only = {
+            "Fixed":          (False, False, False),
+            "Side-hung":      (True,  False, False),
+            "Tilt & turn":    (True,  True,  False),
+            "Tilt only":      (True,  False, True),
+            "French doors":   (False, False, False),
+            "Double sliding": (False, False, False),
+        }[panel["type"]]
+        return dict(swing=swing, tilt=tilt, tilt_only=tilt_only,
+                    french=panel["type"] == "French doors",
+                    double_slide=panel["type"] == "Double sliding")
+
+    # ── Size inputs: slider + typeable number ───────────────────────────
+    # Every size here is a slider for quick changes, with a number box next
+    # to it (no +/- buttons; the "wdnum_" container key hides them, see
+    # styles.py) for typing an exact value. The NUMBER box's key holds the
+    # real value -- the same keys as before, which the Quote Estimator also
+    # sets -- and the slider just mirrors it.
+    WINDOW_SLIDER_MAX_WIDTH_MM = 6000    # slider range only; any width can be typed
+    WINDOW_SLIDER_MAX_HEIGHT_MM = 3000   # slider range only; any height can be typed
+    WINDOW_SLIDER_STEP_MM = 10
+
+    def window_mm_input(label, key, slider_max, min_value=1, max_value=None,
+                        on_change=None, args=()):
+        """
+        A slider and a number box for one size in mm, kept in step.
+        slider_max: the slider's top end (max_value, if given, also caps
+        the number box). Returns the value.
+        """
+        slider_key = f"{key}__slider"
+        if max_value is not None:
+            slider_max = max_value
+        slider_max = max(slider_max, min_value + 1)
+        # The slider shows the number box's value (held at its ends if the
+        # typed value is outside the slider's range).
+        st.session_state[slider_key] = min(max(int(st.session_state[key]), 0), slider_max)
+
+        def _slider_moved():
+            st.session_state[key] = max(st.session_state[slider_key], min_value)
+            if on_change is not None:
+                on_change(*args)
+
+        col_slider, col_number = st.columns([3, 1], vertical_alignment="bottom")
+        with col_slider:
+            st.slider(label, min_value=0, max_value=slider_max, step=WINDOW_SLIDER_STEP_MM,
+                      key=slider_key, on_change=_slider_moved)
+        with col_number:
+            with st.container(key=f"wdnum_{key}"):
+                st.number_input(label, min_value=min_value, max_value=max_value,
+                                step=WINDOW_SLIDER_STEP_MM, key=key,
+                                label_visibility="collapsed",
+                                on_change=on_change, args=args)
+        return st.session_state[key]
+
+    with col_options:
+        col_btn, col_note = st.columns([1, 3], vertical_alignment="center")
+        with col_btn:
+            st.button("Reset", key="window_diagram_reset", on_click=_window_reset)
+        with col_note:
+            st.caption("All panels Fixed, equal widths.")
+
+        render_eyebrow("Size")
+        # Starting sizes go through session state rather than value=, because
+        # the Quote Estimator also sets these keys -- giving both makes
+        # Streamlit show a warning.
+        st.session_state.setdefault("window_diagram_width", 1200)
+        st.session_state.setdefault("window_diagram_height", 1500)
+        window_width_mm = window_mm_input(
+            "Width (mm)", "window_diagram_width", WINDOW_SLIDER_MAX_WIDTH_MM)
+        window_height_mm = window_mm_input(
+            "Height (mm)", "window_diagram_height", WINDOW_SLIDER_MAX_HEIGHT_MM)
+
+        # Frame material and glass, each drawn in its own colour (the
+        # choices and colours live in window_diagram.py). Reset leaves these
+        # as they are, like the size.
+        render_eyebrow("Materials")
+        # Starts on NAKEDWOOD (also if an older choice, like "Pine", is
+        # still remembered from before the list changed).
+        if st.session_state.get("window_diagram_frame") not in FRAME_COLOURS:
+            st.session_state["window_diagram_frame"] = DEFAULT_FRAME
+        window_frame = st.selectbox("Frame", list(FRAME_COLOURS), key="window_diagram_frame")
+
+        # Glass: one row of buttons per pane width ([4][6][8]; the third pane
+        # also has [–] = double glazing), so e.g. 6/6/6 becomes 4/6/6 with one
+        # click on the first row. A "/" sits between the rows of buttons. The
+        # glass type is a dropdown underneath, printed next to the window.
+        # Each LHG code has its own glass pattern (GLASS_CODE_PATTERNS in window_diagram.py).
+        # Starts on 4/4/4.
+        st.session_state.setdefault("window_diagram_glass_1", "4")
+        st.session_state.setdefault("window_diagram_glass_2", "4")
+        st.session_state.setdefault("window_diagram_glass_3", "4")
+
+        def _keep_pane_selected(key, fallback):
+            """
+            A segmented control can be clicked OFF (no button selected). A
+            pane always needs a width, so clicking the selected button again
+            just leaves it selected.
+            """
+            if st.session_state.get(key) is None:
+                st.session_state[key] = st.session_state.get(f"{key}__last", fallback)
+            st.session_state[f"{key}__last"] = st.session_state[key]
+
+        def window_pane_buttons(key, options, label):
+            """One pane's width buttons (st.radio on Streamlit versions without them)."""
+            st.session_state.setdefault(f"{key}__last", st.session_state[key])
+            if hasattr(st, "segmented_control"):
+                value = st.segmented_control(
+                    label, options, key=key, label_visibility="collapsed",
+                    on_change=_keep_pane_selected, args=(key, options[0]),
+                )
+            else:
+                value = st.radio(label, options, key=key, horizontal=True,
+                                 label_visibility="collapsed")
+            return value or st.session_state.get(f"{key}__last", options[0])
+
+        st.markdown('<div class="lh-field-label">Glass (mm)</div>', unsafe_allow_html=True)
+        cols = st.columns([3, 0.4, 3, 0.4, 4], vertical_alignment="center")
+        with cols[0]:
+            pane_1 = window_pane_buttons("window_diagram_glass_1", GLASS_PANE_WIDTHS, "Pane 1 (mm)")
+        with cols[1]:
+            st.markdown('<div class="lh-glass-slash">/</div>', unsafe_allow_html=True)
+        with cols[2]:
+            pane_2 = window_pane_buttons("window_diagram_glass_2", GLASS_PANE_WIDTHS, "Pane 2 (mm)")
+        with cols[3]:
+            st.markdown('<div class="lh-glass-slash">/</div>', unsafe_allow_html=True)
+        with cols[4]:
+            pane_3 = window_pane_buttons("window_diagram_glass_3", ["–"] + GLASS_PANE_WIDTHS,
+                                         "Pane 3 (mm)")
+        # Type: only the types these widths come in (GLASS_COMBINATIONS in
+        # window_diagram.py), in the usual order. Widths that aren't in the
+        # glass list at all have no known types, so every type stays on offer
+        # (the not-in-the-list warning below covers those).
+        chosen_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
+        if chosen_widths in GLASS_COMBINATIONS:
+            available = GLASS_COMBINATIONS[chosen_widths]
+            type_options = (["None"] if "" in available else []) + \
+                           [t for t in GLASS_TYPES if t in available]
+        else:
+            type_options = ["None"] + GLASS_TYPES
+        # A type picked earlier that these widths don't come in goes back to
+        # the first option ("None"), with a pop-up saying so.
+        previous_type = st.session_state.get("window_diagram_glass_type")
+        if previous_type is not None and previous_type not in type_options:
+            st.session_state["window_diagram_glass_type"] = type_options[0]
+            st.toast(f"{chosen_widths} doesn't come in {previous_type}, so Type is now "
+                     f"{type_options[0]}.", icon="ℹ️")
+        glass_type = st.selectbox("Type", type_options, key="window_diagram_glass_type")
+        window_glass_widths = "/".join(w for w in (pane_1, pane_2, pane_3) if w != "–")
+        window_glass_type = None if glass_type == "None" else glass_type
+
+        # LHG code: the codes matching these widths + type (e.g. 6/6/6 plain
+        # = LHG006 (44), LHG009 (48), LHG010 (54) -- they differ by cavity).
+        # Each code has its own pattern (GLASS_CODE_PATTERNS in
+        # window_diagram.py). No matching code -> plain fallback colour.
+        matching_codes = glass_codes_for(window_glass_widths, window_glass_type)
+        code_labels = [f"{code} ({cavity})" for code, cavity in matching_codes]
+        window_glass_code = None
+        if code_labels:
+            if st.session_state.get("window_diagram_glass_code") not in code_labels:
+                st.session_state["window_diagram_glass_code"] = code_labels[0]
+            chosen_label = st.selectbox("LHG code", code_labels, key="window_diagram_glass_code",
+                                        disabled=len(code_labels) == 1)
+            window_glass_code = chosen_label.split(" ")[0]
+        # The chosen code's cavity (mm) -- tells the price estimate whether
+        # 4/4/4 glass is the 44 (68 system) or 48 (88 system) kind.
+        window_glass_cavity = dict(matching_codes).get(window_glass_code)
+
+        # Pattern style for two-colour glass -- a setting for trialling.
+        window_glass_pattern = st.selectbox("Glass pattern", GLASS_PATTERN_TYPES,
+                                            key="window_diagram_glass_pattern")
+        window_glass_colour = (glass_fill_for_code(window_glass_code, window_glass_pattern)
+                               if window_glass_code else GlassFill([GLASS_OTHER_COLOUR]))
+        window_glass_label = glass_label_text(window_glass_widths, window_glass_type)
+
+        # Glass that isn't in the glass list: a pop-up when it's first
+        # picked (not on every rerun), plus a note that stays while it's
+        # selected. It's still drawn -- in the fallback colour if the
+        # widths have no colour of their own.
+        glass_problem = glass_exists(window_glass_widths, window_glass_type)
+        if glass_problem:
+            glass_choice = (window_glass_widths, window_glass_type)
+            if st.session_state.get("window_diagram_glass_warned") != glass_choice:
+                st.toast(f"{glass_problem}.", icon="⚠️")
+                st.session_state["window_diagram_glass_warned"] = glass_choice
+            st.caption(f"⚠️ {glass_problem}."
+                       + " It's drawn in the plain fallback colour"
+                       + ("." if window_glass_widths in GLASS_COMBINATIONS else
+                          ", with its widths printed on the drawing."))
+        else:
+            st.session_state["window_diagram_glass_warned"] = None
+
+        render_eyebrow("Panels")
+        panel_count = st.radio(
+            "Number of panels", [1, 2, 3], horizontal=True,
+            key="window_diagram_panel_count", label_visibility="collapsed",
+        )
+        # Every panel needs at least 1 mm.
+        panel_count = min(panel_count, max(int(window_width_mm), 1))
+        positions = WINDOW_POSITIONS[panel_count]
+
+        render_eyebrow("Panel options")
+        if panel_count > 1:
+            col_btn, col_note = st.columns([2, 3], vertical_alignment="center")
+            with col_btn:
+                st.button("Equalise widths", key="window_diagram_equalise",
+                          on_click=_window_equalise_widths)
+            with col_note:
+                # Double doors (French / Double sliding) count as two panels.
+                st.caption("Types kept. Double doors count as two.")
+        window_widths_mm = None
+        if panel_count == 1:
+            window_panel_controls("left", positions, window_height_mm)
+        else:
+            if panel_count == 2:
+                # Left width: the one set in a width box, or half. Back to
+                # half if the overall width has shrunk too far for it.
+                left_mm = st.session_state.get("window_diagram_split_left_mm")
+                if left_mm is None or not 1 <= left_mm <= window_width_mm - 1:
+                    left_mm = None
+                    st.session_state["window_diagram_split_left_mm"] = None
+                if left_mm is None:
+                    left_mm = window_equal_widths(positions, window_width_mm)["left"]
+                left_mm = int(left_mm)
+                window_widths_mm = {"left": left_mm, "right": window_width_mm - left_mm}
+            else:
+                # Side widths: the ones set in the width boxes, or equal
+                # (see window_equal_widths()). Both back to equal if the
+                # overall width has shrunk too far to leave the middle at
+                # least 1 mm.
+                equal_mm = window_equal_widths(positions, window_width_mm)
+                side_mm = {pos: st.session_state.get(f"window_diagram_three_{pos}_mm")
+                           for pos in ("left", "right")}
+                side_mm = {pos: equal_mm[pos] if mm is None else int(mm)
+                           for pos, mm in side_mm.items()}
+                if (min(side_mm.values()) < 1
+                        or side_mm["left"] + side_mm["right"] > window_width_mm - 1):
+                    side_mm = {"left": equal_mm["left"], "right": equal_mm["right"]}
+                    st.session_state["window_diagram_three_left_mm"] = None
+                    st.session_state["window_diagram_three_right_mm"] = None
+                window_widths_mm = {
+                    "left": side_mm["left"],
+                    "middle": window_width_mm - side_mm["left"] - side_mm["right"],
+                    "right": side_mm["right"],
+                }
+            for pos, mm in window_widths_mm.items():
+                st.session_state[f"window_diagram_panel_width_{pos}"] = mm
+
+            # Tabs: all panels' options exist at once; the tab picks which
+            # one is showing.
+            tabs = st.tabs([pos.capitalize() for pos in positions])
+            for pos, tab in zip(positions, tabs):
+                with tab:
+                    if panel_count == 2:
+                        window_mm_input(
+                            "Width (mm)", f"window_diagram_panel_width_{pos}",
+                            WINDOW_SLIDER_MAX_WIDTH_MM, max_value=window_width_mm - 1,
+                            on_change=(_window_two_left_changed if pos == "left"
+                                       else _window_two_right_changed),
+                        )
+                    elif pos == "middle":
+                        with st.container(key="wdnum_window_diagram_panel_width_middle"):
+                            st.number_input(
+                                "Width (mm)", step=10, key="window_diagram_panel_width_middle",
+                                disabled=True,
+                                help="The middle panel fills the space between the side panels.",
+                            )
+                    else:
+                        other_side = "right" if pos == "left" else "left"
+                        window_mm_input(
+                            "Width (mm)", f"window_diagram_panel_width_{pos}",
+                            WINDOW_SLIDER_MAX_WIDTH_MM,
+                            # Always leave at least 1 mm for the middle panel.
+                            max_value=window_width_mm - window_widths_mm[other_side] - 1,
+                            on_change=_window_three_side_changed, args=(pos,),
+                        )
+                    window_panel_controls(pos, positions, window_height_mm)
+
+    def window_layout_problems(positions):
+        """
+        Reasons the current panels can't be drawn (an empty list if they
+        can). Nothing in the controls prevents these combinations -- this
+        is the single place that decides what's possible, so it can move
+        to the backend unchanged once panel data comes from there.
+        """
+        problems = []
+
+        # Double sliding: two doors sliding OUTWARD, so there must be a
+        # fixed panel on each side for them to slide over.
+        doubles = [pos for pos in positions if panels[pos]["type"] == "Double sliding"]
+        if doubles:
+            if len(positions) != 3 or doubles != ["middle"]:
+                problems.append(
+                    "Double sliding doors slide outward over a fixed panel on each "
+                    "side: use 3 panels, with Double sliding as the middle panel only."
+                )
+            else:
+                for side in ("left", "right"):
+                    if panels[side]["type"] != "Fixed":
+                        problems.append(
+                            f"The {side} panel must be Fixed, because the double "
+                            f"sliding doors slide over it. It's currently set to "
+                            f"{panels[side]['type']}."
+                        )
+            with_bottom = [pos for pos in positions if panels[pos].get("bottom")]
+            if with_bottom:
+                problems.append(
+                    "A fixed bottom section can't be used with double sliding doors "
+                    f"(it's turned on for the {' and '.join(with_bottom)} panel"
+                    f"{'s' if len(with_bottom) > 1 else ''})."
+                )
+
+        sliders = [pos for pos in positions if panels[pos]["type"] == "Sliding"]
+        if not sliders:
+            return problems
+        if len(positions) == 1:
+            problems.append(
+                "A single panel can't slide: a sliding panel needs a fixed panel "
+                "beside it to slide over. Choose 2 panels."
+            )
+        elif len(positions) == 3:
+            problems.append(
+                "Sliding only works on 2-panel windows (one sliding panel and one "
+                "fixed panel), not 3."
+            )
+        elif len(sliders) == 2:
+            problems.append(
+                "Only one panel can slide: the other must be the fixed panel it "
+                "slides over."
+            )
+        else:
+            other = positions[1 - positions.index(sliders[0])]
+            if panels[other]["type"] != "Fixed":
+                problems.append(
+                    f"The {other} panel must be Fixed, because the sliding "
+                    f"{sliders[0]} panel slides over it. It's currently set to "
+                    f"{panels[other]['type']}."
+                )
+        with_bottom = [pos for pos in positions if panels[pos].get("bottom")]
+        if with_bottom:
+            problems.append(
+                "A fixed bottom section can't be used on a sliding window "
+                f"(it's turned on for the {' and '.join(with_bottom)} panel"
+                f"{'s' if len(with_bottom) > 1 else ''})."
+            )
+        return problems
+
+    # Turn the panels into the drawing's options (when they can be drawn).
+    window_slide = False
+    window_problems = window_layout_problems(positions)
+    row = [panels[pos] for pos in positions]
+    if window_problems:
+        diagram_options = None
+    elif panel_count == 2 and any(p["type"] == "Sliding" for p in row):
+        slider_pos = "left" if panels["left"]["type"] == "Sliding" else "right"
+        slider = panels[slider_pos]
+        window_slide = True
+        diagram_options = dict(
+            slide=True, slide_side=slider_pos,
+            tilt=slider["slide_tilt"] == "Tilt & turn",
+            tilt_only=slider["slide_tilt"] == "Tilt",
+            handle_side=slider["handle_side"].lower(),
+            split_left_mm=window_widths_mm["left"],
+        )
+    else:
+        diagram_options = dict(panels=[], panel_widths_mm=None)
+        for p in row:
+            diagram_options["panels"].append(dict(
+                **window_opening(p),
+                handle_side=p["handle_side"].lower(),
+                top_height_mm=(window_top_mm(p, window_height_mm)
+                               if p.get("bottom") and window_height_mm >= 2 else None),
+            ))
+        if window_widths_mm is not None:
+            diagram_options["panel_widths_mm"] = [window_widths_mm[pos] for pos in positions]
+
+    with col_diagram:
+        with st.container(key="window_diagram_panel"):
+            render_eyebrow("Diagram")
+
+            if window_problems:
+                # Not drawable: say why, in place of the diagram. A toast pops
+                # up too, but only when the reasons change (not every rerun).
+                if st.session_state.get("window_diagram_last_problems") != window_problems:
+                    st.toast("This window isn't possible -- see the Diagram panel.", icon="⚠️")
+                st.session_state["window_diagram_last_problems"] = window_problems
+                st.warning(
+                    "**Not possible**\n\n" + "\n".join(f"- {p}" for p in window_problems),
+                    icon="⚠️",
+                )
+            else:
+                st.session_state["window_diagram_last_problems"] = None
+
+                # No button, no gate -- this is cheap local vector drawing with
+                # no network/file I/O involved, so it just redraws on every change.
+                diagram_png = draw_window_diagram(window_width_mm, window_height_mm,
+                                                  frame_color=FRAME_COLOURS[window_frame],
+                                                  glass_color=window_glass_colour, glass_label=window_glass_label,
+                                                  **diagram_options)
+
+                # Fit the diagram inside a max width (half the page) AND a max
+                # height, so tall windows don't grow too tall on screen.
+                MAX_DIAGRAM_WIDTH  = 360
+                MAX_DIAGRAM_HEIGHT = 450
+                diagram_pix = fitz.Pixmap(diagram_png)
+                display_width = min(
+                    MAX_DIAGRAM_WIDTH,
+                    int(MAX_DIAGRAM_HEIGHT * diagram_pix.width / diagram_pix.height),
+                )
+                st.image(diagram_png, width=display_width)
+
+                # Full-quality version: the same drawing as vector PDF on a
+                # blank A4 page, sharp at any zoom and ready to print.
+                diagram_pdf = draw_window_diagram_pdf(
+                    window_width_mm, window_height_mm,
+                    frame_color=FRAME_COLOURS[window_frame],
+                    glass_color=window_glass_colour, glass_label=window_glass_label,
+                    **diagram_options
+                )
+                st.download_button(
+                    "Download PDF",
+                    data=diagram_pdf,
+                    file_name=(f"Window_Diagram_{window_width_mm}x{window_height_mm}"
+                               f"{'_sliding' if window_slide else ''}"
+                               f"{f'_{panel_count}panel' if panel_count > 1 and not window_slide else ''}"
+                               ".pdf"),
+                    mime="application/pdf",
+                    key="window_diagram_pdf_download",
+                )
+
+                # Price estimate for exactly what the diagram shows -- the
+                # diagram's settings ARE the input (see price_estimator.py).
+                st.markdown("---")
+                render_price_estimate(
+                    window_width_mm, window_height_mm, diagram_options,
+                    window_glass_widths, window_glass_cavity,
+                    glass_type=window_glass_type, eyebrow=render_eyebrow,
+                )
+
+
