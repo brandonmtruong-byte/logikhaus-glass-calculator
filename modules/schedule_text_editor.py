@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-pdf_text_editor.py
+pdf_text_editor.py  (vendored into the app as modules/schedule_text_editor.py)
+
+LOCAL CHANGE vs. jennynt-LGH/Schedule-Editor: when two rows match
+overlapping text on the same line (one row's text inside another's, or the
+same row entered twice), only the longest match is applied, so the line is
+no longer printed twice -- see _drop_overlapping_hits(). A delete row that
+overlaps a replacement is skipped for the same reason.
+
+LOCAL CHANGE (preview highlighting): the preview images (only) get every
+edited region drawn as a yellow box, so changes are easy to spot. The
+saved output PDF is never touched by this.
 
 Find-and-replace / delete text inside a PDF, driven by an Excel
 instructions file, while trying to keep the new text matching the
@@ -270,12 +280,18 @@ def get_spans(page):
     which of PyMuPDF's own "line" groupings it belongs to -- so spans
     that make up one continuous printed line can be found and searched
     together (see build_lines / search_text_in_lines), even when that
-    line happens to be split into several spans.
+    line happens to be split into several spans. It also gets a
+    "block_idx", identifying which of PyMuPDF's own "block" groupings
+    (a level above "line") it belongs to -- some PDF generators draw a
+    whole multi-line attribute paragraph as one shared block/text object,
+    and this lets code elsewhere detect "these two edits fall in the same
+    underlying block" to avoid a redaction-corruption failure mode that's
+    specific to editing such a block more than once.
     """
     spans = []
     d = page.get_text("rawdict")
     line_idx = 0
-    for block in d["blocks"]:
+    for block_idx, block in enumerate(d["blocks"]):
         if block.get("type") != 0:  # skip image blocks
             continue
         for line in block.get("lines", []):
@@ -284,6 +300,7 @@ def get_spans(page):
                 span = dict(span)
                 span["line_bbox"] = line_bbox
                 span["line_idx"] = line_idx
+                span["block_idx"] = block_idx
                 chars = span.get("chars", [])
                 span["text"] = "".join(c["c"] for c in chars)
                 span["_chars"] = chars
@@ -439,7 +456,21 @@ def find_containing_span(spans, rect):
 
 def extract_all_fonts(doc, workdir):
     """Extract every embedded font in the document to disk, keyed by base
-    font name (subset prefix like 'ABCDEF+' stripped)."""
+    font name (subset prefix like 'ABCDEF+' stripped) -- as a LIST of
+    every distinct subset found under that name, not just one.
+
+    PDF generators very commonly re-subset the same font independently
+    per page (or per text block), each subset embedding only the glyphs
+    THAT one instance actually uses. Two pages' "Arial", for example, can
+    be two genuinely different files with different glyph coverage --
+    one might include a Polish diacritic the other doesn't. Keeping only
+    the last one seen (as an earlier version of this function did) meant
+    a later page's lookup of "Arial" could silently get a DIFFERENT,
+    incomplete subset that's missing a character the current text
+    actually needs, even though some other subset earlier in the
+    document has it. Keeping every subset and letting the caller check
+    actual glyph coverage (see resolve_font_for_text) avoids that.
+    """
     font_files = {}
     seen = set()
     for page in doc:
@@ -458,10 +489,10 @@ def extract_all_fonts(doc, workdir):
             ext, buf = info[1], info[3]
             if not buf:
                 continue
-            path = os.path.join(workdir, f"{base_name}.{ext or 'ttf'}")
+            path = os.path.join(workdir, f"{base_name}.{xref}.{ext or 'ttf'}")
             with open(path, "wb") as fh:
                 fh.write(buf)
-            font_files[base_name] = path
+            font_files.setdefault(base_name, []).append(path)
     return font_files
 
 
@@ -539,13 +570,27 @@ def _base14_for_style(name):
     return "helv"
 
 
-def resolve_font(span_font_name, font_files):
-    """Return (fontname, fontfile_or_None) for insert_text()."""
+def resolve_font_for_text(span_font_name, font_files, text):
+    """Return (fontname, fontfile_or_None) for insert_text(), specifically
+    chosen so the returned font actually covers every character in `text`
+    -- not just assumed to, based on name alone.
+
+    font_files maps a base font name to a LIST of every distinct embedded
+    subset found under that name anywhere in the document (see
+    extract_all_fonts for why there can be more than one). Different
+    subsets of the "same" font can have different glyph coverage, so this
+    tries each one against the actual text being inserted here and uses
+    the first that works, rather than an arbitrary one that happens to be
+    missing a character this particular insertion needs. Falls back to a
+    built-in base-14 font (matching bold/italic style) only if none of
+    the embedded subsets found under this name cover the text either.
+    """
     name = span_font_name or ""
     if "+" in name:
         name = name.split("+", 1)[1]
-    if name in font_files:
-        return name, font_files[name]
+    for candidate_path in font_files.get(name, []):
+        if font_covers_text(name, candidate_path, text):
+            return name, candidate_path
     return _base14_for_style(name), None
 
 
@@ -650,6 +695,38 @@ def find_near_miss_texts(spans, old):
     return variants
 
 
+def _hits_overlap(a, b):
+    """True if two search hits share at least one character of the same line."""
+    return a["line"] is b["line"] and a["start"] < b["end"] and b["start"] < a["end"]
+
+
+def _drop_overlapping_hits(hits):
+    """Keep at most one replacement for any stretch of text on a line.
+
+    Each line's text is searched separately for every row of the sheet, so
+    two rows whose "Replace from this" texts overlap -- one inside the
+    other, the two sharing a few words, or the same row entered twice --
+    both match the same characters. Both replacements were then drawn on
+    that line, giving doubled text like "RAL9002 Grey white mattRAL9002...".
+
+    The longest match wins (it's the most specific row); for equal lengths,
+    the row higher up the sheet wins. Matches that only touch end-to-start
+    don't overlap and are both kept. Returns (kept_hits, [(kept, dropped)]).
+    """
+    order = sorted(range(len(hits)),
+                   key=lambda i: (-(hits[i]["end"] - hits[i]["start"]),
+                                  hits[i].get("rule_idx", 0), i))
+    kept_idx, dropped = [], []
+    for i in order:
+        clash = next((hits[k] for k in kept_idx if _hits_overlap(hits[k], hits[i])), None)
+        if clash is None:
+            kept_idx.append(i)
+        else:
+            dropped.append((clash, hits[i]))
+    kept_idx.sort()  # back to the original order
+    return [hits[i] for i in kept_idx], dropped
+
+
 # ---------------------------------------------------------------------------
 # Main processing
 # ---------------------------------------------------------------------------
@@ -665,6 +742,13 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
     modified_pages = set()
     overlap_warnings = {}  # page_num -> list of warning strings
     not_found_warnings = []  # human-readable strings about rules that matched nothing
+    debug_notes = []  # diagnostic info surfaced to the person running the tool,
+                       # not just to stderr -- font-fallback events, hits with
+                       # no identifiable styling, and pages where several
+                       # edits land close together (which has been the
+                       # single most reliable predictor of a redaction
+                       # disturbing nearby, untouched text on some documents)
+    edits_per_page = {}  # page_num -> count of true-redaction rects on it
 
     # raw_hit_counts: every time a rule's "old" text was found on a page
     # this rule wasn't entirely gated out of (used to tell "genuinely not
@@ -676,21 +760,36 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
     delete_resolved = [parse_delete_phrase(p["phrase"]) for p in delete_phrases]
     near_miss = {}  # rule_idx -> {variant_text: set(page_num, ...)}
 
-    # LOCAL CHANGE: track each page's edited regions (same rects used for
-    # the white cover-up) so the preview render below can highlight them.
-    # Purely additive -- never touches output_pdf, only the separate
-    # preview_doc copy opened after saving.
+    # LOCAL CHANGE: each page's edited regions (the same redaction and mask
+    # rects used to clear the old text) so the preview render below can
+    # highlight them. Purely additive -- never touches output_pdf, only the
+    # separate preview_doc copy opened after saving.
     page_highlight_rects = {}
 
-    for pno in range(len(doc)):
+    num_pages = len(doc)
+    for pno in range(num_pages):
         page = doc[pno]
         page_num = pno + 1
         spans = get_spans(page)
         lines = build_lines(spans)
         pos_blocks = build_pos_blocks(spans, page.rect.y1)
 
-        cover_rects = []
-        insert_jobs = []  # list of dicts: x, y, text, fontkey, fontfile, size, cover_idx
+        redact_rects = []  # tight rects around the EXACT old text being
+                            # removed/replaced -- these get TRUE redaction
+        mask_rects = []    # rects covering only REPOSITIONING territory
+                            # (the gap a shorter/longer replacement opens or
+                            # closes, or unmatched text being reflowed) --
+                            # these get the older, non-destructive white
+                            # overlay instead. Splitting the two apart keeps
+                            # redaction's footprint as small as possible:
+                            # some PDF generators draw a whole multi-line
+                            # attribute block as one internal text object,
+                            # and redacting a large rect that merely touches
+                            # such a block can wipe out far more than
+                            # intended. A tight redaction rect around just
+                            # the actual old word/phrase is much less likely
+                            # to trigger that.
+        insert_jobs = []  # list of dicts: x, y, text, fontkey, fontfile, size, cover_idx (-> mask_rects)
         raw_hits = []  # collected across all rules before span-grouping (see below)
 
         for rule_idx, rule in enumerate(replace_rules):
@@ -722,6 +821,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
 
                 applied_hit_counts[rule_idx] += 1
                 raw_hits.append({
+                    "rule_idx": rule_idx,
                     "rect": rect, "old": old, "new": new, "size": rule["size"],
                     "span": hit["span"], "line": hit["line"],
                     "start": hit["start"], "end": hit["end"],
@@ -729,6 +829,18 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
 
             for variant_text in find_near_miss_texts(spans, old):
                 near_miss.setdefault(rule_idx, {}).setdefault(variant_text, set()).add(page_num)
+
+        # Two rows can match OVERLAPPING text -- e.g. "kolor alu: RAL extra,
+        # ACC1" and, on some POS numbers, just "RAL extra" inside it (or the
+        # same row typed twice). Both would be printed, one on top of / just
+        # after the other, so the line comes out doubled. Keep only one
+        # match for any stretch of text (see _drop_overlapping_hits).
+        raw_hits, dropped = _drop_overlapping_hits(raw_hits)
+        for kept, lost in dropped:
+            debug_notes.append(
+                f"Page {page_num}: '{lost['old']}' overlaps '{kept['old']}' on the "
+                f"same line -- only '{kept['old']}' -> '{kept['new']}' was applied there."
+            )
 
         # Two different rules can both match text that lives on the SAME
         # underlying printed line (e.g. a summary line like "6. AMSTERDAM
@@ -755,6 +867,11 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         for hit in standalone_hits:
             print(f"  [warn] page {page_num}: could not find styling for "
                   f"'{hit['old']}' -- using a fallback font/position", file=sys.stderr)
+            debug_notes.append(
+                f"Page {page_num}: could not find the original styling for "
+                f"'{hit['old']}' -- used a fallback font/position instead of "
+                f"matching the surrounding text exactly."
+            )
             rect = hit["rect"]
             baseline_y = rect.y1 - (rect.y1 - rect.y0) * 0.2
             fontkey, fontfile = "helv", None
@@ -762,11 +879,21 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             combined_text = hit["new"]
             if not font_covers_text(fontkey, fontfile, combined_text):
                 fontkey, fontfile = _base14_for_style(fontkey), None
-            cover_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
+            redact_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
+            # No containing span was found for this hit (that's what makes
+            # it "standalone"), so there's no block_idx to key off of --
+            # fall back to the POS-block heuristic instead.
+            redact_idx = len(redact_rects) - 1
+            # No reflow gap here (no suffix to bridge), but insert_jobs
+            # always tracks a mask_rects entry for resolve_line_overlaps to
+            # extend if it ever needs to -- start it zero-width.
+            mask_rects.append(fitz.Rect(rect.x1 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
             insert_jobs.append({
                 "x": rect.x0, "y": baseline_y, "text": combined_text,
                 "fontkey": fontkey, "fontfile": fontfile, "size": size,
-                "cover_idx": len(cover_rects) - 1,
+                "cover_idx": len(mask_rects) - 1,
+                "redact_idx": redact_idx,
+                "mask_indices": [len(mask_rects) - 1],
             })
             total_replaced += 1
             modified_pages.add(page_num)
@@ -779,7 +906,6 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 span = hit["span"]
                 rect = hit["rect"]
                 baseline_y = span["origin"][1]
-                fontkey, fontfile = resolve_font(span["font"], font_files)
                 idx, end = hit["start"], hit["end"]
                 if i + 1 < len(line_hits):
                     suffix_end = line_hits[i + 1]["start"]
@@ -792,17 +918,24 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 combined_text = hit["new"] + suffix
 
                 # The document's embedded font is usually a SUBSET containing
-                # only the glyphs the original file actually used. If the
-                # replacement text needs a character that subset doesn't have
-                # (a digit, an accent, a symbol...), using it anyway would
-                # render as a blank box. Fall back to a full-coverage builtin
-                # font (matching the same bold/italic style) in that case.
-                use_fontkey, use_fontfile = fontkey, fontfile
-                if not font_covers_text(use_fontkey, use_fontfile, combined_text):
-                    print(f"  [warn] page {page_num}: font '{use_fontkey}' is missing a "
-                          f"character needed for '{combined_text}' -- falling back to "
-                          f"a built-in font", file=sys.stderr)
-                    use_fontkey, use_fontfile = _base14_for_style(use_fontkey), None
+                # only the glyphs the original file actually used, and the
+                # SAME font name can have several different subsets across
+                # the document with different glyph coverage (see
+                # extract_all_fonts). Pick whichever actual subset -- or,
+                # failing that, a full-coverage builtin font matching the
+                # same bold/italic style -- genuinely covers everything in
+                # this specific combined_text (the replacement plus
+                # whatever original suffix text is being reflowed with it).
+                use_fontkey, use_fontfile = resolve_font_for_text(span["font"], font_files, combined_text)
+                if use_fontfile is None and not font_covers_text(use_fontkey, use_fontfile, combined_text):
+                    print(f"  [warn] page {page_num}: no available font (embedded or "
+                          f"built-in) covers every character needed for '{combined_text}' "
+                          f"-- some characters may not render correctly", file=sys.stderr)
+                    debug_notes.append(
+                        f"Page {page_num}: no available font covers every character "
+                        f"needed for '{combined_text}' -- some characters may not "
+                        f"render correctly there."
+                    )
 
                 # Where to actually draw this hit's text. The FIRST hit on a
                 # line keeps its original position. Every hit after that
@@ -832,11 +965,28 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 # another hit already owns.
                 cover_x0 = min(rect.x0, x)
                 cover_x1 = max(cover_x1, flow_x)
-                cover_rects.append(fitz.Rect(cover_x0 - pad, rect.y0 - pad, cover_x1 + pad, rect.y1 + pad))
+
+                # The OLD TEXT ITSELF gets a tight, exact-fit true-redaction
+                # rect (see the note on redact_rects/mask_rects above).
+                # Everything else in the covered span -- the gap before or
+                # after it that only exists to reflow surrounding text --
+                # is pure repositioning, not sensitive replaced content, so
+                # it gets the safer non-destructive mask instead.
+                redact_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
+                redact_idx = len(redact_rects) - 1
+                mask_rects.append(fitz.Rect(rect.x1 - pad, rect.y0 - pad, cover_x1 + pad, rect.y1 + pad))
+                mask_idx = len(mask_rects) - 1
+                mask_indices = [mask_idx]
+                if cover_x0 < rect.x0 - 1e-6:
+                    mask_rects.append(fitz.Rect(cover_x0 - pad, rect.y0 - pad, rect.x0 + pad, rect.y1 + pad))
+                    mask_indices.append(len(mask_rects) - 1)
+
                 insert_jobs.append({
                     "x": x, "y": baseline_y, "text": combined_text,
                     "fontkey": use_fontkey, "fontfile": use_fontfile, "size": size,
-                    "cover_idx": len(cover_rects) - 1,
+                    "cover_idx": mask_idx,
+                    "redact_idx": redact_idx,
+                    "mask_indices": mask_indices,
                 })
                 total_replaced += 1
                 modified_pages.add(page_num)
@@ -860,14 +1010,28 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                     if phrase_rule["except_pos"] and pos_num in phrase_rule["except_pos"]:
                         continue
 
+                # Text that a replace row is already rewriting isn't deleted
+                # as well -- the delete would also wipe out the new text.
+                clash = next((r for r in raw_hits if _hits_overlap(r, hit)), None)
+                if clash is not None:
+                    debug_notes.append(
+                        f"Page {page_num}: delete '{phrase_rule['phrase']}' overlaps the "
+                        f"replacement '{clash['old']}' -> '{clash['new']}' -- left to the "
+                        f"replacement, not deleted."
+                    )
+                    continue
+
                 pad = 0.4
+                # Delete phrases always genuinely remove content (there's no
+                # replacement text to reflow around), so everything here
+                # goes straight to true redaction.
                 if whole_line and span is not None:
                     # The instruction said to remove the entire line this
                     # text lives on, not just the matched words -- e.g.
                     # "the whole line of 'U-value (W/m2K)'" means delete
                     # the whole "U-value (W/m2K)= 1.39" line.
                     lx0, ly0, lx1, ly1 = span.get("line_bbox", span["bbox"])
-                    cover_rects.append(fitz.Rect(lx0 - pad, ly0 - pad, lx1 + pad, ly1 + pad))
+                    redact_rects.append(fitz.Rect(lx0 - pad, ly0 - pad, lx1 + pad, ly1 + pad))
                     total_deleted += 1
                     modified_pages.add(page_num)
                     continue
@@ -878,36 +1042,64 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                         # (plus separators like " - ") -- remove all of it
                         # so no dangling punctuation is left behind.
                         bx0, by0, bx1, by1 = span["bbox"]
-                        cover_rects.append(fitz.Rect(bx0 - pad, by0 - pad, bx1 + pad, by1 + pad))
+                        redact_rects.append(fitz.Rect(bx0 - pad, by0 - pad, bx1 + pad, by1 + pad))
                         total_deleted += 1
                         modified_pages.add(page_num)
                         continue
-                cover_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
+                redact_rects.append(fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad))
                 total_deleted += 1
                 modified_pages.add(page_num)
 
-        if not cover_rects:
+        if not redact_rects and not mask_rects:
             continue
 
-        resolve_line_overlaps(insert_jobs, cover_rects)
+        edits_per_page[page_num] = len(redact_rects)
 
-        # LOCAL CHANGE: snapshot this page's finalized edit regions before
-        # cover_rects gets reset at the top of the next page's iteration.
-        page_highlight_rects[page_num] = list(cover_rects)
+        resolve_line_overlaps(insert_jobs, mask_rects)
 
-        # True redaction: this removes the underlying text objects that
-        # intersect each cover rectangle from the page's content stream
-        # (not just painting over them), so a PDF viewer's search/copy no
-        # longer finds the old text underneath -- only a plain white box
-        # is left where it was, which we then draw the new text on top of.
-        # images=PDF_REDACT_IMAGE_NONE keeps this scoped to text only, so
-        # it can't affect the window/door diagrams even if a cover rect
-        # happens to sit close to one.
-        for r in cover_rects:
-            page.add_redact_annot(r, fill=(1, 1, 1))
-        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-
+        # LOCAL CHANGE: snapshot this page's finalized edit regions (after
+        # resolve_line_overlaps may have widened some masks) before the
+        # lists are reset at the top of the next page's iteration.
+        # One box per edit: a replacement's redact rect and its mask rect(s)
+        # are joined into one, so it isn't drawn as two boxes side by side.
+        boxes, used_masks, used_redacts = [], set(), set()
         for job in insert_jobs:
+            box = fitz.Rect(redact_rects[job["redact_idx"]])
+            used_redacts.add(job["redact_idx"])
+            for midx in job["mask_indices"]:
+                if mask_rects[midx].width >= 1.0:  # skip zero-width placeholders
+                    box |= mask_rects[midx]
+                used_masks.add(midx)
+            boxes.append(box)
+        boxes += [fitz.Rect(r) for i, r in enumerate(redact_rects) if i not in used_redacts]
+        boxes += [fitz.Rect(r) for i, r in enumerate(mask_rects) if i not in used_masks]
+        # Boxes that overlap (two edits next to each other on one line) are
+        # joined too, so each changed stretch of text shows as one box.
+        merged = True
+        while merged:
+            merged = False
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    inter = boxes[i] & boxes[j]
+                    if not inter.is_empty and inter.height > 0.5 * min(boxes[i].height, boxes[j].height):
+                        boxes[i] |= boxes.pop(j)
+                        merged = True
+                        break
+                if merged:
+                    break
+        page_highlight_rects[page_num] = boxes
+
+        # Map each redact_rects index to the insert_job (if any) it belongs
+        # to, so each hit's full lifecycle -- redact its old text, mask its
+        # reflow gap, draw its new text -- can be finished completely
+        # before moving to the next hit.
+        job_by_redact_idx = {}
+        for job in insert_jobs:
+            ridx = job.get("redact_idx")
+            if ridx is not None:
+                job_by_redact_idx[ridx] = job
+
+        def _draw_insert(page, job):
             x, y, text, fontkey, fontfile, size = (
                 job["x"], job["y"], job["text"], job["fontkey"], job["fontfile"], job["size"]
             )
@@ -917,12 +1109,59 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             else:
                 page.insert_text((x, y), text, fontsize=size, fontname=fontkey, color=(0, 0, 0))
 
+        # The old text actually being replaced/deleted gets TRUE redaction
+        # -- removed from the page's content stream, not just painted over
+        # -- so a PDF viewer's search/copy no longer finds it. Kept as
+        # tight, minimal rects (see redact_rects/mask_rects note above) to
+        # limit how much surrounding content a redaction could ever touch.
+        # images=PDF_REDACT_IMAGE_NONE keeps this scoped to text only, so
+        # it can't affect the window/door diagrams even if a rect happens
+        # to sit close to one.
+        #
+        # Each hit's redact -> mask -> insert is applied as one complete
+        # unit, in sequence, before starting the next hit's -- rather than
+        # batching every redaction on the page into one add-all-then-
+        # apply-once call. A save-and-reopen between every individual
+        # redaction was tried at one point to chase a corruption pattern
+        # where an unrelated, unedited line elsewhere on the page would go
+        # blank or get mangled once a second redaction landed anywhere
+        # nearby -- but that turned out to introduce ITS OWN new
+        # corruption (of adjacent lines, even for a single isolated edit)
+        # that the plain sequential approach here does not have. If that
+        # original multi-edit corruption pattern resurfaces on a document,
+        # it's a known open issue -- flag it rather than assuming this
+        # sequence is the cause.
+        for i, r in enumerate(redact_rects):
+            page.add_redact_annot(r, fill=(1, 1, 1))
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            job = job_by_redact_idx.get(i)
+            if job is not None:
+                for midx in job["mask_indices"]:
+                    page.draw_rect(mask_rects[midx], color=None, fill=(1, 1, 1),
+                                    fill_opacity=1, overlay=True)
+                _draw_insert(page, job)
+
+        # Any mask rects not tied to a specific redaction (there currently
+        # are none by construction, but this keeps behavior correct if that
+        # ever changes) still get painted.
+        drawn_mask_indices = {midx for job in insert_jobs for midx in job["mask_indices"]}
+        for midx, r in enumerate(mask_rects):
+            if midx not in drawn_mask_indices:
+                page.draw_rect(r, color=None, fill=(1, 1, 1), fill_opacity=1, overlay=True)
+
+        # Any insert job that somehow isn't tied to a redaction (shouldn't
+        # happen given how insert_jobs are built, but keeps behavior
+        # correct if that ever changes) still gets drawn.
+        for job in insert_jobs:
+            if job.get("redact_idx") is None:
+                _draw_insert(page, job)
+
         # Automated stand-in for a human eyeballing "the whole page, not
         # just the edited spot": re-check the page we just edited for any
         # inserted text unexpectedly overlapping something else.
         if insert_jobs:
             inserted_specs = [(job["x"], job["y"], job["text"]) for job in insert_jobs]
-            page_warnings = find_overlap_warnings(page, inserted_specs, cover_rects)
+            page_warnings = find_overlap_warnings(page, inserted_specs, redact_rects + mask_rects)
             if page_warnings:
                 overlap_warnings[page_num] = page_warnings
                 for w in page_warnings:
@@ -1000,6 +1239,23 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 f"(outside any Only/Except pages) -- double-check the "
                 f"spelling/spacing matches the PDF exactly."
             )
+
+    # Pages with several edits landing on them are the ones where a
+    # redaction disturbing unrelated, nearby text has actually been
+    # observed on some documents -- not a certainty for any given page,
+    # but worth a look rather than only discovering it by eye later.
+    for page_num, count in sorted(edits_per_page.items()):
+        if count >= 2:
+            debug_notes.append(
+                f"Page {page_num}: {count} pieces of text were removed/replaced "
+                f"on this page -- when several edits land close together, "
+                f"it's occasionally caused an unrelated, untouched line nearby "
+                f"to come out blank or garbled on some documents. Worth a look."
+            )
+
+    if debug_notes:
+        not_found_warnings.append("--- Debug info ---")
+        not_found_warnings.extend(debug_notes)
 
     return total_replaced, total_deleted, sorted(modified_pages), overlap_warnings, not_found_warnings
 

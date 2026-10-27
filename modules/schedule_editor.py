@@ -1,9 +1,10 @@
 """
 SCHEDULE TEXT EDITOR — bridge to the vendored pdf_text_editor.py
-Wraps process() from modules/schedule_text_editor.py (a vendored, unmodified
-copy of jennynt-LGH/Schedule-Editor's engine — see that file's own
-docstring for the full instructions-spreadsheet format) so it can slot
-into the stepper flow.
+Wraps process() from modules/schedule_text_editor.py (a vendored copy of
+jennynt-LGH/Schedule-Editor's engine, with one local fix: overlapping
+matches from two rows are only applied once -- see that file's own
+docstring, which also has the full instructions-spreadsheet format) so it
+can slot into the stepper flow.
 
 process() works on file PATHS, not an in-memory document, so this writes
 the current working doc out to a temp file, runs process() on it, then
