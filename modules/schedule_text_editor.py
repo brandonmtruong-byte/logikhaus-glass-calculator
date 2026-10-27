@@ -8,6 +8,14 @@ same row entered twice), only the longest match is applied, so the line is
 no longer printed twice -- see _drop_overlapping_hits(). A delete row that
 overlaps a replacement is skipped for the same reason.
 
+LOCAL CHANGE (one line stays one field): when a replacement lands partway
+along a line (e.g. "CN60 4/4ESG" after "Glass: "), the WHOLE line -- label
+included -- is redrawn as a single piece of text, so the PDF no longer holds
+"Glass:" and "LHG026_4/4 (26) CN" as two separate fields. A label stored as
+its own separate PDF line just to the left is pulled in too. Lines with
+mixed fonts/sizes fall back to the old behaviour -- see
+_plan_whole_line_rewrite().
+
 LOCAL CHANGE (preview highlighting): the preview images (only) get every
 edited region drawn as a yellow box, so changes are easy to spot. The
 saved output PDF is never touched by this.
@@ -695,6 +703,142 @@ def find_near_miss_texts(spans, old):
     return variants
 
 
+def _char_style(owner):
+    span = owner[0]
+    return (span.get("font"), round(span.get("size", 0), 2), span.get("color"))
+
+
+def _line_styles(owners):
+    """Styles used by a line's visible characters. Spaces don't count: a
+    stray space in another font (left by an earlier edit) looks the same."""
+    return {_char_style(o) for o in owners
+            if not o[0]["_chars"][o[1]]["c"].isspace()}
+
+
+def _left_neighbours(line, all_lines, busy_line_ids):
+    """Lines that continue `line` to its LEFT on the same printed row: same
+    style and baseline, ending right where the next one starts (no more
+    than about a space apart). Some PDFs store e.g. "Alu-clad colour:" and
+    "RAL extra" as two separate lines even though they print as one.
+    Returns (text_to_prepend, [chars]) -- the joining space included
+    where there's a visible gap -- or ("", []) if there are none. Lines
+    that have their own replacements (busy_line_ids) are never pulled in.
+    """
+    owners = line["char_owners"]
+    styles = _line_styles(owners)
+    if len(styles) != 1:
+        return "", []
+    style = next(iter(styles))
+    first_char = owners[0][0]["_chars"][owners[0][1]]
+    base_y = first_char["origin"][1]
+    size = owners[0][0]["size"]
+    left_x = first_char["bbox"][0]
+    left_text = line["text"]
+    pieces, boxes = [], []
+    used = {id(line)}
+    while True:
+        found = None
+        for cand in all_lines:
+            co = cand["char_owners"]
+            if not co or id(cand) in used or id(cand) in busy_line_ids:
+                continue
+            if _line_styles(co) != {style}:
+                continue
+            last_char = co[-1][0]["_chars"][co[-1][1]]
+            if abs(last_char["origin"][1] - base_y) > 0.5:
+                continue
+            gap = left_x - last_char["bbox"][2]
+            if -0.5 <= gap <= 0.6 * size:
+                found = (cand, gap)
+                break
+        if found is None:
+            break
+        cand, gap = found
+        used.add(id(cand))
+        joiner = ""
+        if gap > 0.15 * size and not cand["text"][-1:].isspace() and not left_text[:1].isspace():
+            joiner = " "
+        pieces.insert(0, cand["text"] + joiner)
+        boxes = [o[0]["_chars"][o[1]] for o in cand["char_owners"]] + boxes
+        left_x = cand["char_owners"][0][0]["_chars"][cand["char_owners"][0][1]]["bbox"][0]
+        left_text = cand["text"]
+    return "".join(pieces), boxes
+
+
+def _plan_whole_line_rewrite(line, line_hits, font_files, all_lines=(), busy_line_ids=()):
+    """LOCAL CHANGE (keep a replaced line as ONE piece of text).
+
+    The normal path redraws only the replacement (plus anything after it)
+    as a new piece of text, leaving the start of the line -- e.g. the
+    "Glass:" label -- as a separate, untouched piece. It looks right, but
+    the PDF then holds "Glass:" and "LHG026_4/4 (26) CN" as two separate
+    fields, which is what anything reading the PDF's text sees.
+
+    When the whole line is in one style (same font, size and colour), this
+    instead plans to redraw the ENTIRE line -- label, every replacement on
+    it, and the text in between and after -- as one piece, at the line's
+    original start. Returns None (use the normal path) when that wouldn't
+    look identical: mixed styles on the line, a replacement given a
+    different font size from the line, or a label whose redrawn width
+    doesn't match the original (i.e. it was laid out with gaps, like a
+    price column, rather than as plain running text).
+    """
+    owners = line["char_owners"]
+    if not owners or not line_hits:
+        return None
+    styles = _line_styles(owners)
+    if len(styles) != 1:
+        return None
+    span0 = line_hits[0]["span"]
+    size = span0["size"]
+    if any(h["size"] and abs(h["size"] - size) > 0.05 for h in line_hits):
+        return None
+
+    text = line["text"]
+    first = line_hits[0]
+    lead_text, lead_boxes = _left_neighbours(line, all_lines, busy_line_ids)
+    prefix = lead_text + text[:first["start"]]
+    parts = [prefix]
+    for i, h in enumerate(line_hits):
+        nxt = line_hits[i + 1]["start"] if i + 1 < len(line_hits) else len(text)
+        parts.append(h["new"] + text[h["end"]:nxt])
+    full_text = "".join(parts)
+
+    fontkey, fontfile = resolve_font_for_text(span0["font"], font_files, full_text)
+    font_obj = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font(fontkey)
+
+    chars = [o[0]["_chars"][o[1]] for o in owners]
+    all_chars = lead_boxes + chars
+    boxes = [c["bbox"] for c in all_chars]
+    # Height of the area to clear comes from the visible characters only --
+    # a stray space from an earlier edit can have a much taller box that
+    # would reach into the lines above and below.
+    vis = [c["bbox"] for c in all_chars if not c["c"].isspace()] or boxes
+    line_x0 = boxes[0][0]
+    if prefix:
+        want = first["rect"].x0 - line_x0
+        got = font_obj.text_length(prefix, fontsize=size)
+        if abs(got - want) > max(1.0, 0.03 * want):
+            # The label pulled in from the left didn't redraw at the same
+            # width -- try again with just this line's own text.
+            if lead_text:
+                return _plan_whole_line_rewrite(line, line_hits, font_files)
+            return None
+
+    return {
+        "x": line_x0,
+        "y": span0["origin"][1],
+        "text": full_text,
+        "fontkey": fontkey,
+        "fontfile": fontfile,
+        "size": size,
+        "width": font_obj.text_length(full_text, fontsize=size),
+        "old_rect": fitz.Rect(min(b[0] for b in boxes), min(b[1] for b in vis),
+                              max(b[2] for b in boxes), max(b[3] for b in vis)),
+        "line_x1": span0["line_bbox"][2],
+    }
+
+
 def _hits_overlap(a, b):
     """True if two search hits share at least one character of the same line."""
     return a["line"] is b["line"] and a["start"] < b["end"] and b["start"] < a["end"]
@@ -901,6 +1045,40 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         for line_hits in hits_by_line.values():
             line = line_hits[0]["line"]
             line_hits.sort(key=lambda h: h["rect"].x0)
+
+            # LOCAL CHANGE: redraw the whole line as one piece of text when
+            # possible, so e.g. "Glass: LHG026_4/4 (26) CN" doesn't end up
+            # as two separate fields "Glass:" + "LHG026_4/4 (26) CN" (see
+            # _plan_whole_line_rewrite). The old text of the WHOLE line is
+            # truly redacted, so nothing is left hidden underneath either.
+            plan = _plan_whole_line_rewrite(line, line_hits, font_files,
+                                            lines, set(hits_by_line.keys()))
+            if plan is not None:
+                if plan["fontfile"] is None and not font_covers_text(plan["fontkey"], None, plan["text"]):
+                    debug_notes.append(
+                        f"Page {page_num}: no available font covers every character "
+                        f"needed for '{plan['text']}' -- some characters may not "
+                        f"render correctly there."
+                    )
+                old_rect = plan["old_rect"]
+                redact_rects.append(fitz.Rect(old_rect.x0 - pad, old_rect.y0 - pad,
+                                              old_rect.x1 + pad, old_rect.y1 + pad))
+                redact_idx = len(redact_rects) - 1
+                cover_x1 = max(plan["line_x1"], plan["x"] + plan["width"])
+                mask_rects.append(fitz.Rect(old_rect.x1 - pad, old_rect.y0 - pad,
+                                            max(cover_x1, old_rect.x1) + pad, old_rect.y1 + pad))
+                mask_idx = len(mask_rects) - 1
+                insert_jobs.append({
+                    "x": plan["x"], "y": plan["y"], "text": plan["text"],
+                    "fontkey": plan["fontkey"], "fontfile": plan["fontfile"], "size": plan["size"],
+                    "cover_idx": mask_idx,
+                    "redact_idx": redact_idx,
+                    "mask_indices": [mask_idx],
+                })
+                total_replaced += len(line_hits)
+                modified_pages.add(page_num)
+                continue
+
             flow_x = None  # where the previous hit's rendered text actually ended
             for i, hit in enumerate(line_hits):
                 span = hit["span"]
