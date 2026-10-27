@@ -105,7 +105,8 @@ def row_text(piece, pieces):
     Only pieces that continue the line are added: each must start no more
     than ROW_GAP_SHARE x font size after the previous one ends, so text in
     a separate column further right (e.g. 'Select Spruce') isn't pulled in.
-    Returns (text, rightmost_piece).
+    Returns (text, rightmost_piece, pieces_used) -- pieces_used is the list
+    of the separate pieces' texts, for the raw-text debug view.
     """
     size = piece['font_size']
     same_row = sorted(
@@ -114,13 +115,15 @@ def row_text(piece, pieces):
          and p['x0'] >= piece['x0']),
         key=lambda p: p['x0'])
     text, right_end, last = piece['text'], piece['x1'], piece
+    parts = [piece['text']]
     for p in same_row:
         if p['x0'] - right_end > ROW_GAP_SHARE * size:
             break
         text = f"{text} {p['text']}"
         right_end = max(right_end, p['x1'])
         last = p
-    return text, last
+        parts.append(p['text'])
+    return text, last, parts
 
 
 def extract_size_and_glass_lines(page):
@@ -136,17 +139,19 @@ def extract_size_and_glass_lines(page):
     pieces       = extract_text_pieces(page)
     size_entries = []
     glass_lines  = []
+    size_texts   = {}   # size line y_mid -> its raw text, for the debug view
 
     # Top to bottom, so "the size entry just recorded" below really is the
     # one above an irregular-shape marker.
     for piece in sorted(pieces, key=lambda p: (p['y_mid'], p['x0'])):
-        full_text, last = row_text(piece, pieces)
+        full_text, last, parts = row_text(piece, pieces)
 
         # Size line, e.g. "size (W x H): 1200 x 800"
         m = re.search(r'size \(W x H\):\s*(\d+)\s*x\s*(\d+)', full_text)
         if m and 'size (W x H)' in piece['text']:
             w, h = int(m.group(1)), int(m.group(2))
             size_entries.append((piece['y_mid'], w, h, False))
+            size_texts[piece['y_mid']] = ' | '.join(parts)
 
         # Irregular shape markers — flag the size entry just recorded
         if re.search(r'ANGLE EXTRA|ARCH EXTRA', piece['text'], re.IGNORECASE):
@@ -168,7 +173,16 @@ def extract_size_and_glass_lines(page):
                 'lhg_code':    lhg_code_found,
                 'lhg_matches': lhg_matches,   # full list: [] = none found, 2+ = ambiguous
                 'text':        full_text,
+                # Raw pieces as the PDF holds them, separated by ' | ' (the
+                # same style as the frame code matcher's Block Text), so a
+                # line split by the Schedule Text Editor shows up as e.g.
+                # 'Glass: | LHG026_4/4 (26) CN'.
+                'raw_text':    ' | '.join(parts),
+                'page':        page.number + 1,
             })
+
+    for glass_line in glass_lines:
+        glass_line['size_texts'] = size_texts
 
     return size_entries, glass_lines
 
@@ -306,5 +320,12 @@ def process_glass_weights(page, glass_lookup):
         size_entry = match_glass_to_size(glass_line, size_entries)
         if size_entry is None:
             continue
-        rows.append(compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width))
+        row = compute_weight_row(page, glass_line, size_entry, glass_lookup, page_width)
+        # Raw text for the "Show raw text" debug view in app.py: the size
+        # line and glass line exactly as read, so a missed or wrong LHG
+        # code can be traced back to what's actually in the PDF.
+        size_raw = glass_line['size_texts'].get(size_entry[0], '')
+        row['Raw Text'] = f"{size_raw}\n{glass_line['raw_text']}"
+        row['Page'] = glass_line['page']
+        rows.append(row)
     return rows

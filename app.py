@@ -145,7 +145,12 @@ def render_mass_preview(result, doc):
     if not rows:
         st.info("No glass lines found on this document.")
         return
-    df = pd.DataFrame([{k: v for k, v in r.items() if k != '_skip'} for r in rows])
+    # Raw Text and Page are only for the debug toggle below, and the
+    # '_'-prefixed keys (_skip, _highlight_rect) are internal -- none of
+    # them belong in the table.
+    df = pd.DataFrame([{k: v for k, v in r.items()
+                        if not k.startswith('_') and k not in ('Raw Text', 'Page')}
+                       for r in rows])
 
     def highlight_row(row):
         original = rows[row.name]
@@ -190,6 +195,14 @@ def render_mass_preview(result, doc):
                 st.image(pix.tobytes("png"), caption=f"Page {pno}", use_container_width=True)
             preview_doc.close()
 
+    # Same idea as the frame code step's raw block text: the size and glass
+    # lines exactly as read from the PDF. Separate pieces of one printed
+    # line are shown with ' | ' between them.
+    if st.toggle("Show raw text per glass line", value=False, key="mass_show_debug"):
+        for r in rows:
+            st.write(f"**Page {r.get('Page', '?')} · {r.get('Size', '')}** ({r.get('LHG Code', '')})")
+            st.code(r.get('Raw Text', ''), language=None)
+
 
 def render_frame_preview(result, doc):
     rows  = result['rows']
@@ -204,7 +217,7 @@ def render_frame_preview(result, doc):
             return ['color: #c0392b'] * len(row)
         return [''] * len(row)
 
-    display_df = frame_df.drop(columns=['Block Text'], errors='ignore')
+    display_df = frame_df.drop(columns=['Block Text', '_highlight_rect'], errors='ignore')
     st.dataframe(display_df.style.apply(highlight_frame_row, axis=1), use_container_width=True, hide_index=True)
 
     error_count = sum(1 for r in rows if r['Frame Code'] == 'ERROR')
