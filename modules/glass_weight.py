@@ -52,50 +52,123 @@ def load_glass_type_lookup():
     return lookup
 
 
-def extract_size_and_glass_lines(page):
-    """
-    Scan a page's text blocks and pull out:
-      - size_entries: list of (y_mid, width_mm, height_mm, is_irregular)
-      - glass_lines:  list of dicts with position/font info + LHG code (if any)
-    """
-    blocks       = page.get_text('dict')['blocks']
-    size_entries = []
-    glass_lines  = []
+# Stamps this module (or the frame matcher) already wrote, e.g. "[12 kg]" or
+# "[LHF003]" -- never read back as part of a line's text.
+_STAMP_RE = re.compile(r'^\[[^\]]*\]$')
 
-    for b in blocks:
+
+def extract_text_pieces(page):
+    """
+    Every piece of text on the page as PyMuPDF splits it, with its position.
+
+    One printed line can come out as several pieces. The Schedule Text
+    Editor in particular redraws replaced text as a NEW piece next to the
+    old label, e.g. 'Glass:' and 'LHG026_4/4 (26) CN' side by side on the
+    same row. See row_text() for how they're joined back together.
+    """
+    pieces = []
+    for b in page.get_text('dict')['blocks']:
         if 'lines' not in b:
             continue
         for line in b['lines']:
-            spans     = line['spans']
-            full_text = ''.join(s['text'] for s in spans).strip()
+            spans = [s for s in line['spans'] if s['text'].strip()]
+            if not spans:
+                continue
+            text = ''.join(s['text'] for s in spans).strip()
+            if _STAMP_RE.match(text):
+                continue
+            first, last = spans[0], spans[-1]
+            pieces.append({
+                'text':      text,
+                'x0':        min(s['bbox'][0] for s in spans),
+                'x1':        max(s['bbox'][2] for s in spans),
+                'y_mid':     (first['bbox'][1] + first['bbox'][3]) / 2,
+                'y_base':    first['bbox'][1] + first['size'] * 0.85,
+                'font_size': first['size'],
+                'last_span': last,
+            })
+    return pieces
 
-            # Size line, e.g. "size (W x H): 1200 x 800"
-            m = re.search(r'size \(W x H\):\s*(\d+)\s*x\s*(\d+)', full_text)
-            if m:
-                w, h  = int(m.group(1)), int(m.group(2))
-                y_mid = (spans[0]['bbox'][1] + spans[0]['bbox'][3]) / 2
-                size_entries.append((y_mid, w, h, False))
 
-            # Irregular shape markers — flag the size entry just recorded
-            if re.search(r'ANGLE EXTRA|ARCH EXTRA', full_text, re.IGNORECASE):
-                if size_entries:
-                    y, w, h, _ = size_entries[-1]
-                    size_entries[-1] = (y, w, h, True)
+# How far apart two pieces on one row can be and still count as one line
+# (as a share of the font size) -- bigger gaps are a separate column.
+ROW_GAP_SHARE = 6.0
 
-            # Glass line — keep the raw match list so downstream code can
-            # tell "no code found" apart from "multiple codes found"
-            if full_text.startswith('Glass:') or full_text.startswith('glass:'):
-                lhg_matches    = re.findall(r'LHG\d+', full_text)
-                lhg_code_found = lhg_matches[0] if len(lhg_matches) == 1 else None
-                last           = spans[-1]
-                bbox           = last['bbox']
-                glass_lines.append({
-                    'y_mid':       (bbox[1] + bbox[3]) / 2,
-                    'y_base':      bbox[1] + last['size'] * 0.85,
-                    'font_size':   last['size'],
-                    'lhg_code':    lhg_code_found,
-                    'lhg_matches': lhg_matches,   # full list: [] = none found, 2+ = ambiguous
-                })
+
+def row_text(piece, pieces):
+    """
+    The full text of the printed line that starts with `piece`: `piece`
+    plus every piece to its right on the same row, in left-to-right order
+    -- the same idea as the frame code matcher joining a window's text
+    before searching it.
+
+    Only pieces that continue the line are added: each must start no more
+    than ROW_GAP_SHARE x font size after the previous one ends, so text in
+    a separate column further right (e.g. 'Select Spruce') isn't pulled in.
+    Returns (text, rightmost_piece).
+    """
+    size = piece['font_size']
+    same_row = sorted(
+        (p for p in pieces
+         if p is not piece and abs(p['y_mid'] - piece['y_mid']) <= size * 0.5
+         and p['x0'] >= piece['x0']),
+        key=lambda p: p['x0'])
+    text, right_end, last = piece['text'], piece['x1'], piece
+    for p in same_row:
+        if p['x0'] - right_end > ROW_GAP_SHARE * size:
+            break
+        text = f"{text} {p['text']}"
+        right_end = max(right_end, p['x1'])
+        last = p
+    return text, last
+
+
+def extract_size_and_glass_lines(page):
+    """
+    Scan a page's text and pull out:
+      - size_entries: list of (y_mid, width_mm, height_mm, is_irregular)
+      - glass_lines:  list of dicts with position/font info + LHG code (if any)
+
+    Each line's FULL row text is used (see row_text()), so a glass line the
+    Schedule Text Editor has split into 'Glass:' + 'LHG026_4/4 (26) CN'
+    is still read as 'Glass: LHG026_4/4 (26) CN'.
+    """
+    pieces       = extract_text_pieces(page)
+    size_entries = []
+    glass_lines  = []
+
+    # Top to bottom, so "the size entry just recorded" below really is the
+    # one above an irregular-shape marker.
+    for piece in sorted(pieces, key=lambda p: (p['y_mid'], p['x0'])):
+        full_text, last = row_text(piece, pieces)
+
+        # Size line, e.g. "size (W x H): 1200 x 800"
+        m = re.search(r'size \(W x H\):\s*(\d+)\s*x\s*(\d+)', full_text)
+        if m and 'size (W x H)' in piece['text']:
+            w, h = int(m.group(1)), int(m.group(2))
+            size_entries.append((piece['y_mid'], w, h, False))
+
+        # Irregular shape markers — flag the size entry just recorded
+        if re.search(r'ANGLE EXTRA|ARCH EXTRA', piece['text'], re.IGNORECASE):
+            if size_entries:
+                y, w, h, _ = size_entries[-1]
+                size_entries[-1] = (y, w, h, True)
+
+        # Glass line — keep the raw match list so downstream code can
+        # tell "no code found" apart from "multiple codes found"
+        if piece['text'].startswith('Glass:') or piece['text'].startswith('glass:'):
+            lhg_matches    = re.findall(r'LHG\d+', full_text)
+            lhg_code_found = lhg_matches[0] if len(lhg_matches) == 1 else None
+            span           = last['last_span']
+            bbox           = span['bbox']
+            glass_lines.append({
+                'y_mid':       (bbox[1] + bbox[3]) / 2,
+                'y_base':      bbox[1] + span['size'] * 0.85,
+                'font_size':   span['size'],
+                'lhg_code':    lhg_code_found,
+                'lhg_matches': lhg_matches,   # full list: [] = none found, 2+ = ambiguous
+                'text':        full_text,
+            })
 
     return size_entries, glass_lines
 
