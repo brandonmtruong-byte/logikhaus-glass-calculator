@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import streamlit as st
 import pandas as pd
 import fitz
@@ -358,6 +359,97 @@ def start_new_document(file_bytes, file_name, unique_id):
     st.session_state.current_step     = 0
     st.session_state.step_status      = {k: 'pending' for k in STEP_ORDER}
     st.session_state.step_results     = {}
+    st.session_state.applied_all      = False
+    st.session_state.apply_all_notes  = []
+
+
+# How long "Apply all" waits for the background hardware data before it
+# gives up and skips the Hardware Schedule step (seconds).
+APPLY_ALL_HARDWARE_WAIT = 90
+
+
+def _wait_for_hardware(hw_loader, timeout=APPLY_ALL_HARDWARE_WAIT):
+    """
+    The hardware data loads in the background. "Apply all" needs it for the
+    Hardware Schedule step, so wait for it (up to `timeout` seconds) rather
+    than skipping a step that would have worked a few seconds later.
+    Returns (lookup, images, image_cache) or None.
+    """
+    if hw_loader is None:
+        return None
+    start = time.time()
+    while (hw_loader.data() is None and hw_loader.snapshot()['status'] == 'loading'
+           and time.time() - start < timeout):
+        time.sleep(1)
+    return hw_loader.data()
+
+
+def run_all_steps(xlsx_bytes, glass_lookup, glass_type_lookup, frame_codes, frame_rules, hw_loader):
+    """
+    "Apply all": run every step in STEP_ORDER, one after another, on the
+    working document -- the SAME apply_* functions the step-by-step buttons
+    call, in the same order, so the result is identical to clicking Apply on
+    each step. A step that can't run (its data isn't available, or it hits an
+    error) is marked skipped and the rest carry on; the reason is kept in
+    st.session_state.apply_all_notes for the summary.
+    """
+    notes = []
+    progress = st.progress(0.0, text="Starting...")
+    for n, step_key in enumerate(STEP_ORDER):
+        label = STEP_LABELS[step_key]
+        progress.progress(n / len(STEP_ORDER), text=f"Step {n + 1} of {len(STEP_ORDER)}: {label}...")
+        doc = st.session_state.doc        # Schedule Text Editor swaps in a new document
+        try:
+            if step_key == 'logo':
+                apply_logo(doc)
+                result = None
+            elif step_key == 'text_replace':
+                result = apply_text_replace(doc, xlsx_bytes)
+                st.session_state.doc = result.pop('doc')
+            elif step_key == 'mass':
+                result = apply_mass(doc, glass_lookup)
+            elif step_key == 'frame':
+                if frame_codes is None or frame_rules is None:
+                    raise RuntimeError("the frame code sheet isn't available")
+                result = apply_frame(doc, frame_codes, frame_rules, glass_type_lookup)
+            elif step_key == 'hardware_schedule':
+                progress.progress(n / len(STEP_ORDER),
+                                  text=f"Step {n + 1} of {len(STEP_ORDER)}: {label} (waiting for hardware data)...")
+                hw_data = _wait_for_hardware(hw_loader)
+                if hw_data is None:
+                    raise RuntimeError("the hardware lookup data isn't available")
+                lookup, images, image_cache = hw_data
+                result = apply_hardware_schedule(doc, lookup, images, image_cache)
+            elif step_key == 'legend':
+                result = apply_legend(doc)
+            else:
+                raise RuntimeError("no Apply all handler for this step")
+            st.session_state.step_results[step_key] = result
+            st.session_state.step_status[step_key] = 'applied'
+        except Exception as e:
+            st.session_state.step_status[step_key] = 'skipped'
+            notes.append(f"{label} was skipped: {e}")
+    progress.progress(1.0, text="All steps done")
+    st.session_state.current_step = len(STEP_ORDER)
+    st.session_state.applied_all = True
+    st.session_state.apply_all_notes = notes
+
+
+def render_step_details(step_key, result, doc):
+    """The same "View details" content each step shows in the stepper."""
+    if step_key == 'logo':
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
+        st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
+    elif step_key == 'text_replace':
+        render_text_replace_preview(result)
+    elif step_key == 'mass':
+        render_mass_preview(result, doc)
+    elif step_key == 'frame':
+        render_frame_preview(result, doc)
+    elif step_key == 'hardware_schedule':
+        render_hardware_schedule_preview(result, doc)
+    elif step_key == 'legend':
+        render_legend_preview(result)
 
 
 def sanitize_filename_part(text):
@@ -500,9 +592,37 @@ if st.session_state.active_view == 'PDF Modifier':
         if st.button("Start Over", use_container_width=True, type="secondary"):
             doc.close()
             for key in ['doc', 'uploaded_file_id', 'file_name', 'current_step', 'step_status', 'step_results',
-                        'preflight_result']:
+                        'preflight_result', 'applied_all', 'apply_all_notes']:
                 st.session_state.pop(key, None)
             st.rerun()
+
+    # ── Apply all: every step in one go, before any step has been started ──
+    # Only offered while nothing has been applied or skipped yet; once the
+    # step-by-step route has been started, it carries on that way.
+    all_pending = (st.session_state.current_step == 0
+                   and all(s == 'pending' for s in st.session_state.step_status.values()))
+    if all_pending:
+        with st.container(border=True, key="apply_all_box"):
+            st.markdown(f"**Apply all {len(STEP_ORDER)} steps at once**")
+            st.caption("Upload the instructions spreadsheet for the Schedule Text Editor and every "
+                       "step runs in order. Or go through the steps one by one below.")
+            if os.path.exists(TEMPLATE_XLSX_PATH):
+                with open(TEMPLATE_XLSX_PATH, "rb") as f:
+                    st.download_button(
+                        "Download blank instructions template (.xlsx)",
+                        data=f.read(),
+                        file_name="template_instructions.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="template_download_apply_all",
+                    )
+            apply_all_xlsx = st.file_uploader(
+                "Instructions spreadsheet (.xlsx)", type="xlsx", key="xlsx_upload_apply_all"
+            )
+            if st.button(f"Apply all {len(STEP_ORDER)} steps", key="apply_all",
+                         use_container_width=True, type="primary", disabled=apply_all_xlsx is None):
+                run_all_steps(apply_all_xlsx.getvalue(), glass_lookup, glass_type_lookup,
+                              frame_codes, frame_rules, hw_loader)
+                st.rerun()
 
     # ── Stepper ──────────────────────────────────────────────────────────
     for i, step_key in enumerate(STEP_ORDER):
@@ -606,19 +726,7 @@ if st.session_state.active_view == 'PDF Modifier':
                 st.markdown(f'<div class="status-box">✓ {label} applied</div>', unsafe_allow_html=True)
 
                 with st.expander("View details", expanded=False):
-                    if step_key == 'logo':
-                        pix = doc[0].get_pixmap(matrix=fitz.Matrix(1.3, 1.3))
-                        st.image(pix.tobytes("png"), caption="Page 1 preview", use_container_width=True)
-                    elif step_key == 'text_replace':
-                        render_text_replace_preview(result)
-                    elif step_key == 'mass':
-                        render_mass_preview(result, doc)
-                    elif step_key == 'frame':
-                        render_frame_preview(result, doc)
-                    elif step_key == 'hardware_schedule':
-                        render_hardware_schedule_preview(result, doc)
-                    elif step_key == 'legend':
-                        render_legend_preview(result)
+                    render_step_details(step_key, result, doc)
 
                 if st.button("Continue →", key=f"continue_{step_key}", use_container_width=True, type="primary"):
                     st.session_state.current_step += 1
@@ -627,6 +735,18 @@ if st.session_state.active_view == 'PDF Modifier':
     # ── All steps done: download ────────────────────────────────────────
     if st.session_state.current_step >= len(STEP_ORDER):
         render_eyebrow("All steps complete")
+
+        # After "Apply all": anything that was skipped, and each step's
+        # details (the same as "View details" in the step-by-step route).
+        if st.session_state.get('applied_all'):
+            for note in st.session_state.get('apply_all_notes', []):
+                st.warning(note)
+            for step_key in STEP_ORDER:
+                if st.session_state.step_status.get(step_key) != 'applied':
+                    continue
+                with st.expander(f"{STEP_LABELS[step_key]} - details", expanded=False):
+                    render_step_details(step_key, st.session_state.step_results.get(step_key), doc)
+
         # Work on a copy so the in-app document isn't altered on every rerun.
         out_doc = fitz.open(stream=doc.tobytes(), filetype="pdf")
         # Shrink images to ~1000 ppi at the size they're printed (sharp on
