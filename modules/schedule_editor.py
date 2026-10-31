@@ -45,6 +45,11 @@ Instructions file format (first sheet):
         ...
         (a blank row ends the table)
 
+    Columns are found by their header text, so their order doesn't matter.
+    "Font size of new text" is OPTIONAL -- the column can be left out of
+    the sheet entirely, or any cell in it left blank. Either way the new
+    text keeps the size of the text it replaces.
+
     "Replace from this" can list several exact alternatives for the SAME
     "to this" text, separated by "|" -- e.g. "jonied onsite | joined
     onsiet" both becoming "joined onsite". This is for different known
@@ -201,11 +206,23 @@ def parse_instructions(xlsx_path):
             # "except"/"skip" covers all the header wordings seen so far:
             # the original "Exception", and the newer "Except for this" /
             # "Skip this (don't apply to these)".
+            # The "Font size of new text" column is OPTIONAL: when the sheet
+            # has no such header, col_size stays None and every replacement
+            # keeps the size of the text it replaces (the same as leaving a
+            # font size cell blank). Columns are only ever read by their
+            # header -- never guessed by position -- so a sheet without this
+            # column can't have some other column read as a font size.
+            col_size = next((j for j, c in enumerate(norm_row) if "font size" in c), None)
             col_exc = next(
                 (j for j, c in enumerate(norm_row) if "except" in c or "skip" in c),
                 (col_only + 1) if col_only is not None else col_from + 2,
             )
-            col_size = next((j for j, c in enumerate(norm_row) if "font size" in c), col_exc + 1)
+            # The guessed fallback above must never land on a column that
+            # already has a known job (e.g. "Only here" followed straight by
+            # "Font size" with no Skip column) -- a font size like 12.08
+            # would otherwise be read as "skip pages 12 and 8".
+            if col_exc in (col_from, col_to, col_only, col_size):
+                col_exc = None
             i += 1
             while i < n:
                 r = rows[i]
@@ -214,8 +231,8 @@ def parse_instructions(xlsx_path):
                     break
                 new = r[col_to] if col_to < len(r) else None
                 only_raw = r[col_only] if (col_only is not None and col_only < len(r)) else None
-                exc_raw = r[col_exc] if col_exc < len(r) else None
-                size_raw = r[col_size] if col_size < len(r) else None
+                exc_raw = r[col_exc] if (col_exc is not None and col_exc < len(r)) else None
+                size_raw = r[col_size] if (col_size is not None and col_size < len(r)) else None
 
                 only_pages, only_pos = _parse_location_cell(only_raw)
                 except_pages, except_pos = _parse_location_cell(exc_raw)
@@ -226,6 +243,8 @@ def parse_instructions(xlsx_path):
                         size = float(size_raw)
                 except (TypeError, ValueError):
                     size = None
+                if size is not None and size <= 0:
+                    size = None  # 0 / negative means "not set", not invisible text
 
                 # "Replace from this" can list several exact alternatives,
                 # separated by "|", that should all become the SAME "to
