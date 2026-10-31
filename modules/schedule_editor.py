@@ -24,9 +24,10 @@ Everything for this step is in this one file:
           italic); a replacement takes the style of the text it replaces.
           A character missing from the embedded font is taken from another
           embedded copy of the same font; only one that no copy has falls
-          back to a built-in font of the same bold/italic style. Characters
-          the original PDF had painted over are painted over again -- see
-          _font_runs() and find_hidden_chars().
+          back to a built-in font of the same bold/italic style. The ":"
+          after a bold extras label, which some schedule PDFs paint over
+          with a white box, is shown, with the italic text after it moved
+          along to make room -- see _font_runs() and find_hidden_chars().
         - the preview images get every edited region drawn as a yellow box
           (the saved PDF is never touched by this).
       To update from GitHub later: replace PART 1 with the new
@@ -940,10 +941,10 @@ def find_hidden_chars(page):
     covers the bold label's trailing ":", so the page shows "2 quantity -
     LS kit form charge", not "2 quantity: - LS kit form charge".
 
-    Redrawn text goes on top of everything, so a covered character would
-    suddenly show. This finds them (an opaque fill drawn AFTER the text,
-    covering most of the character) so they can be left out of the redraw
-    and the line looks exactly as it did. Returns {round(y): [(x,
+    On a line the editor redraws, such a character is SHOWN (as asked:
+    don't hide the colon after bold extras), and the text after it is
+    moved right just enough not to overlap it. This finds them (an opaque
+    fill drawn AFTER the text, covering most of the character). Returns {round(y): [(x,
     cover_rect, cover_colour), ...]} keyed by hidden characters' origins
     -- see _hidden_cover()."""
     hidden = {}
@@ -988,7 +989,7 @@ def _char_groups(chars_with_span, hidden=None):
     justified space). Each group can then be redrawn at its exact
     original position in its own font, so nothing moves. A character the
     original PDF had painted over (see find_hidden_chars) gets a group of
-    its own carrying that cover, so it can be painted over again."""
+    its own, marked "cover", so the text after it can be given room."""
     groups = []
     for ch, span in chars_with_span:
         cover = _hidden_cover(ch, hidden)
@@ -1091,20 +1092,30 @@ def _plan_whole_line_rewrite(line, line_hits, font_files, all_lines=(), busy_lin
         cursor = h["end"]
     _keep(cursor, len(pairs))
 
-    # 3. Pick real fonts for every run and measure.
+    # 3. Pick real fonts for every run and measure. A character the
+    #    original PDF had painted over (the ":" after a bold extras label)
+    #    is shown, and the text after it moves right just enough not to
+    #    run into it -- "2 quantity: - LS kit form charge".
     out_runs, missing = [], set()
+    push = 0.0              # how far everything after a shown ":" moves right
+    clear_until = None      # where the last shown hidden character ends
     for r in runs:
         if not r["text"]:
             continue
         pieces, miss = _font_runs(r["text"], r["span"], font_files)
         missing |= miss
-        x = r["x"]
+        x = r["x"] + push
+        if clear_until is not None and x < clear_until:
+            push += clear_until - x
+            x = clear_until
+        clear_until = None
         for t, f in pieces:
             w = f.text_length(t, fontsize=r["size"])
             out_runs.append({"x": x, "y": r["y"], "text": t, "font": f, "size": r["size"],
-                             "color": _color_tuple(r["span"].get("color", 0)), "width": w,
-                             "cover": r.get("cover")})
+                             "color": _color_tuple(r["span"].get("color", 0)), "width": w})
             x += w
+        if r.get("cover") is not None:
+            clear_until = x
     if not out_runs:
         return None
 
@@ -1577,28 +1588,15 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             if job.get("runs"):
                 # Every run in its own font/size, written together (one text
                 # object per colour) so the line reads back as one field.
-                # A character the original PDF had painted over is painted
-                # over again straight after it, the same way the original
-                # did, so it stays in the text but not on the page.
                 writers = {}
-
-                def _flush():
-                    for color, tw in writers.items():
-                        tw.write_text(page, color=color)
-                    writers.clear()
-
                 for r in job["runs"]:
                     tw = writers.get(r["color"])
                     if tw is None:
                         tw = writers[r["color"]] = fitz.TextWriter(page.rect)
-                    rx = job["x"] + r["dx"]
-                    tw.append((rx, r["y"]), r["text"], font=r["font"], fontsize=r["size"])
-                    if r.get("cover") is not None:
-                        _flush()
-                        rel, colour = r["cover"]
-                        page.draw_rect(fitz.Rect(rx + rel.x0, rel.y0, rx + rel.x1, rel.y1),
-                                       color=None, fill=colour, fill_opacity=1, overlay=True)
-                _flush()
+                    tw.append((job["x"] + r["dx"], r["y"]), r["text"],
+                              font=r["font"], fontsize=r["size"])
+                for color, tw in writers.items():
+                    tw.write_text(page, color=color)
                 return
             x, y, text, fontkey, fontfile, size = (
                 job["x"], job["y"], job["text"], job["fontkey"], job["fontfile"], job["size"]
