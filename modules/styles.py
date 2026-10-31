@@ -288,7 +288,7 @@ def render_header():
     with col_title:
         st.markdown("""
         <div style="padding-top: 1rem;">
-            <div class="lh-title">PDF Fixr</div>
+            <div class="lh-title">PDF Fixr Tool</div>
             <div class="lh-sub">Logikhaus Pty Ltd - internal tool</div>
         </div>
         """, unsafe_allow_html=True)
