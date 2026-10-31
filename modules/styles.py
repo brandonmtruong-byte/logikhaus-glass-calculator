@@ -57,6 +57,23 @@ CUSTOM_CSS = """
     }
     div[data-testid="stDownloadButton"] button:hover { background: #6e1414; }
 
+    /* Schedule Text Editor: "Download blank instructions template" is a
+       helper, not a step-continuing action, so it uses the plain outlined
+       secondary look (like Skip) instead of brand red. Matched by its key
+       (template_download_<step>); the extra container layer makes this
+       more specific than the red download-button rule above. */
+    div[class*="st-key-template_download"] div[data-testid="stDownloadButton"] button {
+        background: transparent !important; color: inherit !important;
+        border: 1px solid rgba(128,128,128,0.5) !important;
+        font-weight: 400 !important; width: auto !important;
+    }
+    div[class*="st-key-template_download"] div[data-testid="stDownloadButton"] button * {
+        color: inherit !important;
+    }
+    div[class*="st-key-template_download"] div[data-testid="stDownloadButton"] button:hover {
+        background: rgba(128,128,128,0.15) !important;
+    }
+
     /* Hide Streamlit's auto-generated header anchor links (the "#" icon
        that appears next to every st.markdown/st.header heading). */
     h1 a[href^="#"], h2 a[href^="#"], h3 a[href^="#"],
