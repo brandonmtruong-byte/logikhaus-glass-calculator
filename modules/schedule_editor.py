@@ -7,7 +7,7 @@ Everything for this step is in this one file:
       Reads the instructions .xlsx and does the actual find-and-replace /
       delete in the PDF. Copied from the jennynt-LGH/Schedule-Editor GitHub
       repo (pdf_text_editor.py, latest commit "Debug output added"), with
-      three LOCAL CHANGES marked in the code:
+      four LOCAL CHANGES marked in the code:
         - overlapping rows (one row's text inside another's, or the same
           row entered twice) are only applied once, so a line is never
           printed twice -- see _drop_overlapping_hits(). A delete row that
@@ -15,13 +15,22 @@ Everything for this step is in this one file:
         - one line stays one field: when a replacement lands partway along
           a line (e.g. after "Glass: "), the WHOLE line, label included, is
           redrawn as one piece of text, so the PDF doesn't end up holding
-          "Glass:" and "LHG026_4/4 (26) CN" as two separate fields. Lines
-          with mixed fonts/sizes keep the old behaviour -- see
+          "Glass:" and "LHG026_4/4 (26) CN" as two separate fields -- see
           _plan_whole_line_rewrite().
+        - original font, size and bold/italic kept: every part of a
+          redrawn line keeps its OWN font, size, style and colour at its
+          original position (a bold "9. DOSTAWA EXPORT - 2 quantity:" label
+          stays bold, the italic " - LS kit form charge" after it stays
+          italic); a replacement takes the style of the text it replaces.
+          A character missing from the embedded font is taken from another
+          embedded copy of the same font; only one that no copy has falls
+          back to a built-in font of the same bold/italic style. Characters
+          the original PDF had painted over are painted over again -- see
+          _font_runs() and find_hidden_chars().
         - the preview images get every edited region drawn as a yellow box
           (the saved PDF is never touched by this).
       To update from GitHub later: replace PART 1 with the new
-      pdf_text_editor.py code, then re-apply the three LOCAL CHANGES.
+      pdf_text_editor.py code, then re-apply the four LOCAL CHANGES.
 
   PART 2 -- THE APP STEP (apply_text_replace())
       What steps.py calls. process() works on file paths, so this saves the
@@ -569,6 +578,8 @@ def find_overlap_warnings(page, inserted_specs, cover_rects):
 
     warnings = []
     for ins in inserted_spans:
+        if not ins["text"].strip():
+            continue  # a blank space can't visibly overlap anything
         ins_rect = fitz.Rect(ins["bbox"])
         for other in other_spans:
             other_rect = fitz.Rect(other["bbox"])
@@ -655,6 +666,15 @@ def font_covers_text(fontkey, fontfile, text):
     return True
 
 
+def _job_width(job):
+    """Rendered width of an insert job -- precomputed for the run-based jobs
+    from _plan_whole_line_rewrite, measured for the single-font ones."""
+    if job.get("width") is not None:
+        return job["width"]
+    font_obj = fitz.Font(fontfile=job["fontfile"]) if job["fontfile"] else fitz.Font(job["fontkey"])
+    return font_obj.text_length(job["text"], fontsize=job["size"])
+
+
 def resolve_line_overlaps(insert_jobs, cover_rects):
     """When two different replacements land on the same visual line close
     together (e.g. a short bold label right next to a longer description
@@ -693,16 +713,13 @@ def resolve_line_overlaps(insert_jobs, cover_rects):
         jobs.sort(key=lambda j: j["x"])
         for i in range(len(jobs) - 1):
             cur = jobs[i]
-            font_obj = fitz.Font(fontfile=cur["fontfile"]) if cur["fontfile"] else fitz.Font(cur["fontkey"])
-            cur_width = font_obj.text_length(cur["text"], fontsize=cur["size"])
-            cur_end = cur["x"] + cur_width
+            cur_end = cur["x"] + _job_width(cur)
             nxt = jobs[i + 1]
             if cur_end <= nxt["x"] + epsilon:
                 continue
             shift = cur_end - nxt["x"]
             nxt["x"] += shift
-            nxt_font_obj = fitz.Font(fontfile=nxt["fontfile"]) if nxt["fontfile"] else fitz.Font(nxt["fontkey"])
-            nxt_width = nxt_font_obj.text_length(nxt["text"], fontsize=nxt["size"])
+            nxt_width = _job_width(nxt)
             cover = cover_rects[nxt["cover_idx"]]
             cover.x1 = max(cover.x1, nxt["x"] + nxt_width)
 
@@ -737,46 +754,32 @@ def find_near_miss_texts(spans, old):
     return variants
 
 
-def _char_style(owner):
-    span = owner[0]
-    return (span.get("font"), round(span.get("size", 0), 2), span.get("color"))
-
-
-def _line_styles(owners):
-    """Styles used by a line's visible characters. Spaces don't count: a
-    stray space in another font (left by an earlier edit) looks the same."""
-    return {_char_style(o) for o in owners
-            if not o[0]["_chars"][o[1]]["c"].isspace()}
-
-
 def _left_neighbours(line, all_lines, busy_line_ids):
     """Lines that continue `line` to its LEFT on the same printed row: same
-    style and baseline, ending right where the next one starts (no more
-    than about a space apart). Some PDFs store e.g. "Alu-clad colour:" and
-    "RAL extra" as two separate lines even though they print as one.
-    Returns (text_to_prepend, [chars]) -- the joining space included
-    where there's a visible gap -- or ("", []) if there are none. Lines
-    that have their own replacements (busy_line_ids) are never pulled in.
+    baseline, ending right where the next one starts (no more than about a
+    space apart). Some PDFs store e.g. "Alu-clad colour:" and "RAL extra"
+    as two separate lines even though they print as one. Their style
+    doesn't matter -- each piece is redrawn in its own font (see
+    _plan_whole_line_rewrite).
+
+    Returns (list_of_lines_left_to_right, joiner_after_each) -- joiner is
+    " " where there's a visible gap and no space character already, so the
+    redrawn text still reads "Alu-clad colour: RAL extra". Lines that have
+    their own replacements (busy_line_ids) are never pulled in.
     """
     owners = line["char_owners"]
-    styles = _line_styles(owners)
-    if len(styles) != 1:
-        return "", []
-    style = next(iter(styles))
     first_char = owners[0][0]["_chars"][owners[0][1]]
     base_y = first_char["origin"][1]
     size = owners[0][0]["size"]
     left_x = first_char["bbox"][0]
     left_text = line["text"]
-    pieces, boxes = [], []
+    found_lines, joiners = [], []
     used = {id(line)}
     while True:
         found = None
         for cand in all_lines:
             co = cand["char_owners"]
             if not co or id(cand) in used or id(cand) in busy_line_ids:
-                continue
-            if _line_styles(co) != {style}:
                 continue
             last_char = co[-1][0]["_chars"][co[-1][1]]
             if abs(last_char["origin"][1] - base_y) > 0.5:
@@ -792,84 +795,340 @@ def _left_neighbours(line, all_lines, busy_line_ids):
         joiner = ""
         if gap > 0.15 * size and not cand["text"][-1:].isspace() and not left_text[:1].isspace():
             joiner = " "
-        pieces.insert(0, cand["text"] + joiner)
-        boxes = [o[0]["_chars"][o[1]] for o in cand["char_owners"]] + boxes
+        found_lines.insert(0, cand)
+        joiners.insert(0, joiner)
         left_x = cand["char_owners"][0][0]["_chars"][cand["char_owners"][0][1]]["bbox"][0]
         left_text = cand["text"]
-    return "".join(pieces), boxes
+    return found_lines, joiners
 
 
-def _plan_whole_line_rewrite(line, line_hits, font_files, all_lines=(), busy_line_ids=()):
-    """LOCAL CHANGE (keep a replaced line as ONE piece of text).
+# ---------------------------------------------------------------------------
+# Keeping the original font, size and bold/italic style
+# ---------------------------------------------------------------------------
 
-    The normal path redraws only the replacement (plus anything after it)
-    as a new piece of text, leaving the start of the line -- e.g. the
-    "Glass:" label -- as a separate, untouched piece. It looks right, but
-    the PDF then holds "Glass:" and "LHG026_4/4 (26) CN" as two separate
-    fields, which is what anything reading the PDF's text sees.
+_FONT_CACHE = {}
 
-    When the whole line is in one style (same font, size and colour), this
-    instead plans to redraw the ENTIRE line -- label, every replacement on
-    it, and the text in between and after -- as one piece, at the line's
-    original start. Returns None (use the normal path) when that wouldn't
-    look identical: mixed styles on the line, a replacement given a
-    different font size from the line, or a label whose redrawn width
-    doesn't match the original (i.e. it was laid out with gaps, like a
-    price column, rather than as plain running text).
+
+def _font_obj(key_or_path, is_file):
+    """fitz.Font objects are slow-ish to build -- make each one once."""
+    ck = (key_or_path, is_file)
+    if ck not in _FONT_CACHE:
+        try:
+            _FONT_CACHE[ck] = fitz.Font(fontfile=key_or_path) if is_file else fitz.Font(key_or_path)
+        except Exception:
+            _FONT_CACHE[ck] = None
+    return _FONT_CACHE[ck]
+
+
+def _base14_for_span(span):
+    """Built-in fallback font matching a span's bold/italic style, judged
+    by the font's name AND PyMuPDF's style flags (bit 1 = italic, bit 4 =
+    bold) -- some fonts' names don't say "Bold"/"Italic" at all."""
+    name = (span.get("font") or "").lower()
+    flags = span.get("flags", 0) or 0
+    bold = "bold" in name or "black" in name or "heavy" in name or bool(flags & 16)
+    italic = "italic" in name or "oblique" in name or bool(flags & 2)
+    if bold and italic:
+        return "hebi"
+    if bold:
+        return "hebo"
+    if italic:
+        return "heit"
+    return "helv"
+
+
+_STYLE_WORDS_RE = re.compile(r"(bold|black|heavy|semibold|demibold|italic|oblique|regular|roman|book|normal)")
+
+
+def _family_and_style(font_name, flags=0):
+    """("arial", bold, italic) for names like "ABCDEF+Arial-BoldMT",
+    "Arial,Bold", "ArialMT" or "Arial" -- so different copies of the same
+    font, stored under slightly different names, can stand in for each
+    other."""
+    name = (font_name or "").split("+", 1)[-1].lower()
+    bold = any(w in name for w in ("bold", "black", "heavy")) or bool((flags or 0) & 16)
+    italic = "italic" in name or "oblique" in name or bool((flags or 0) & 2)
+    family = re.split(r"[,\-]", name)[0]
+    family = _STYLE_WORDS_RE.sub("", family)
+    family = re.sub(r"(psmt|mt|ps)$", "", family).replace(" ", "").replace("_", "")
+    return family, bold, italic
+
+
+def _font_candidates(span, font_files):
+    """Fonts to try for text drawn in `span`'s style, best first:
+      1. every embedded copy (subset) of the span's own font, found
+         anywhere in the document;
+      2. embedded copies of the SAME family and style stored under another
+         name (e.g. "ArialMT" for "Arial", "Arial,Bold" for
+         "Arial-BoldMT");
+      3. a built-in font of the same bold/italic style.
+    Copies that can't be used to draw text (no character map -- common
+    for "Identity-H" subsets) are left out. Returns [(label, fitz.Font)]."""
+    name = (span.get("font") or "").split("+", 1)[-1]
+    want = _family_and_style(name, span.get("flags", 0))
+    ordered = list(font_files.get(name, []))
+    for other, paths in font_files.items():
+        if other != name and _family_and_style(other) == want:
+            ordered += paths
+    cands, seen = [], set()
+    for path in ordered:
+        if path in seen:
+            continue
+        seen.add(path)
+        f = _font_obj(path, True)
+        if f is not None and any(f.has_glyph(c) for c in (32, 48, 65, 97)):
+            cands.append((name, f))
+    key = _base14_for_span(span)
+    f = _font_obj(key, False)
+    if f is not None:
+        cands.append((key, f))
+    return cands
+
+
+def _has(f, ch):
+    return bool(f.has_glyph(ord(ch)))
+
+
+def _font_runs(text, span, font_files):
+    """Split `text` (to be drawn in `span`'s style) into [(text, font)]
+    pieces so every character -- spaces included -- is drawn with a font
+    that really has it.
+
+    One embedded copy of the original font that covers the whole text is
+    used if there is one. Otherwise each character takes the first copy
+    that has it, so only a character that NO copy of the original font
+    has falls back to the built-in font -- not the whole line, as before.
+    Returns (pieces, missing_chars)."""
+    cands = _font_candidates(span, font_files)
+    if not cands:
+        return [], set(text)
+    for _, f in cands[:-1]:
+        if all(_has(f, ch) for ch in text):
+            return [(text, f)], set()
+    pieces, missing = [], set()
+    cur_font, cur_text = None, ""
+    for ch in text:
+        if cur_font is not None and _has(cur_font, ch):
+            f = cur_font
+        else:
+            f = next((f for _, f in cands if _has(f, ch)), None)
+            if f is None:
+                if not ch.isspace():
+                    missing.add(ch)
+                f = cands[-1][1]
+        if f is cur_font:
+            cur_text += ch
+        else:
+            if cur_text:
+                pieces.append((cur_text, cur_font))
+            cur_font, cur_text = f, ch
+    if cur_text:
+        pieces.append((cur_text, cur_font))
+    return pieces, missing
+
+
+def _color_tuple(c):
+    if isinstance(c, (tuple, list)):
+        return tuple(c[:3])
+    c = int(c or 0)
+    return ((c >> 16) & 255) / 255.0, ((c >> 8) & 255) / 255.0, (c & 255) / 255.0
+
+
+def find_hidden_chars(page):
+    """Characters the PDF prints but then paints over -- e.g. some schedule
+    PDFs draw a white box behind an extras line's italic description that
+    covers the bold label's trailing ":", so the page shows "2 quantity -
+    LS kit form charge", not "2 quantity: - LS kit form charge".
+
+    Redrawn text goes on top of everything, so a covered character would
+    suddenly show. This finds them (an opaque fill drawn AFTER the text,
+    covering most of the character) so they can be left out of the redraw
+    and the line looks exactly as it did. Returns {round(y): [(x,
+    cover_rect, cover_colour), ...]} keyed by hidden characters' origins
+    -- see _hidden_cover()."""
+    hidden = {}
+    try:
+        fills = [d for d in page.get_drawings()
+                 if d.get("fill") is not None and "f" in (d.get("type") or "")
+                 and (d.get("fill_opacity") if d.get("fill_opacity") is not None else 1) >= 0.99]
+        if not fills:
+            return hidden
+        for t in page.get_texttrace():
+            later = [d for d in fills if d.get("seqno", -1) > t.get("seqno", 0)]
+            if not later:
+                continue
+            for c in t["chars"]:
+                bx = fitz.Rect(c[3])
+                area = bx.width * bx.height
+                if area <= 0:
+                    continue
+                for d in later:
+                    inter = bx & d["rect"]
+                    if not inter.is_empty and inter.width * inter.height >= 0.6 * area:
+                        hidden.setdefault(round(c[2][1]), []).append(
+                            (c[2][0], inter, tuple(d["fill"][:3])))
+                        break
+    except Exception:
+        return {}
+    return hidden
+
+
+def _hidden_cover(ch, hidden):
+    """(covered_rect, colour) if the original PDF painted over `ch`, else None."""
+    for x, rect, colour in (hidden.get(round(ch["origin"][1]), ()) if hidden else ()):
+        if abs(x - ch["origin"][0]) < 0.2:
+            return rect, colour
+    return None
+
+
+def _char_groups(chars_with_span, hidden=None):
+    """Group a line's characters into stretches that were printed as plain
+    running text in ONE style: a new group starts wherever the style
+    (span) changes or there's a positioning jump (a column gap, a tab, a
+    justified space). Each group can then be redrawn at its exact
+    original position in its own font, so nothing moves. A character the
+    original PDF had painted over (see find_hidden_chars) gets a group of
+    its own carrying that cover, so it can be painted over again."""
+    groups = []
+    for ch, span in chars_with_span:
+        cover = _hidden_cover(ch, hidden)
+        if cover is not None:
+            groups.append({"span": span, "chars": [ch], "cover": cover})
+            continue
+        if groups and groups[-1].get("cover") is None:
+            g = groups[-1]
+            prev = g["chars"][-1]
+            jump = abs(ch["origin"][0] - prev["bbox"][2]) > 0.5 or abs(ch["origin"][1] - prev["origin"][1]) > 0.5
+            if g["span"] is span and not jump:
+                g["chars"].append(ch)
+                continue
+        groups.append({"span": span, "chars": [ch]})
+    for g in groups:
+        g["text"] = "".join(c["c"] for c in g["chars"])
+        g["x"] = g["chars"][0]["origin"][0]
+        g["y"] = g["chars"][0]["origin"][1]
+        if g.get("cover") is not None:
+            # Cover box relative to the character's own origin, so it moves
+            # with the character if the text after an edit shifts.
+            rect, colour = g["cover"]
+            g["cover"] = (fitz.Rect(rect.x0 - g["x"], rect.y0, rect.x1 - g["x"], rect.y1), colour)
+    return groups
+
+
+def _plan_whole_line_rewrite(line, line_hits, font_files, all_lines=(), busy_line_ids=(), hidden=None):
+    """LOCAL CHANGE (keep a replaced line as ONE piece of text, in its
+    original fonts and bold/italic styles).
+
+    The old path redrew only the replacement plus everything after it, all
+    in ONE font -- the style of the replaced word -- as a separate piece of
+    text next to the untouched start of the line. Two problems followed:
+      * the PDF held e.g. "Glass:" and "LHG026_4/4 (26) CN" as two separate
+        fields, and
+      * on a mixed-style line like "9. DOSTAWA EXPORT - 2 quantity:" (bold)
+        + " - LS kit form charge" (italic), the italic part came out bold.
+
+    This plans to redraw the WHOLE line (plus any separately-stored label
+    just to its left -- see _left_neighbours) in one go, as runs:
+      * every original stretch of text is redrawn in its OWN font, size,
+        style and colour, at its original position (text after a
+        replacement shifts by however much longer/shorter the new text is);
+      * each replacement takes the style of the text it replaces, at the
+        size from the sheet's Font size column if one is given.
+    All runs are written as one text object, so the line stays one field.
+    Returns None if the line has no usable characters.
     """
     owners = line["char_owners"]
     if not owners or not line_hits:
         return None
-    styles = _line_styles(owners)
-    if len(styles) != 1:
-        return None
-    span0 = line_hits[0]["span"]
-    size = span0["size"]
-    if any(h["size"] and abs(h["size"] - size) > 0.05 for h in line_hits):
-        return None
 
+    neighbours, joiners = _left_neighbours(line, all_lines, busy_line_ids)
+
+    runs = []          # dicts: x, y, text, size, span (style source)
+    old_chars = []     # every original character being redrawn (for the redaction box)
+
+    # 1. Labels stored as separate lines just to the left: unchanged, at
+    #    their own positions.
+    for nb, joiner in zip(neighbours, joiners):
+        pairs = [(o[0]["_chars"][o[1]], o[0]) for o in nb["char_owners"]]
+        old_chars += [c for c, _ in pairs]
+        groups = _char_groups(pairs, hidden)
+        if not groups:
+            continue
+        if joiner:
+            groups[-1]["text"] += joiner
+        for g in groups:
+            runs.append({"x": g["x"], "y": g["y"], "text": g["text"],
+                         "size": g["span"]["size"], "span": g["span"], "cover": g.get("cover")})
+
+    # 2. This line: original stretches + replacements, left to right.
+    pairs = [(o[0]["_chars"][o[1]], o[0]) for o in owners]
+    old_chars += [c for c, _ in pairs]
     text = line["text"]
-    first = line_hits[0]
-    lead_text, lead_boxes = _left_neighbours(line, all_lines, busy_line_ids)
-    prefix = lead_text + text[:first["start"]]
-    parts = [prefix]
-    for i, h in enumerate(line_hits):
-        nxt = line_hits[i + 1]["start"] if i + 1 < len(line_hits) else len(text)
-        parts.append(h["new"] + text[h["end"]:nxt])
-    full_text = "".join(parts)
+    delta = 0.0   # how far text after the edits so far has to move right
 
-    fontkey, fontfile = resolve_font_for_text(span0["font"], font_files, full_text)
-    font_obj = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font(fontkey)
+    def _keep(a, b):
+        for g in _char_groups(pairs[a:b], hidden):
+            runs.append({"x": g["x"] + delta, "y": g["y"], "text": g["text"],
+                         "size": g["span"]["size"], "span": g["span"], "cover": g.get("cover")})
 
-    chars = [o[0]["_chars"][o[1]] for o in owners]
-    all_chars = lead_boxes + chars
-    boxes = [c["bbox"] for c in all_chars]
+    cursor = 0
+    for h in line_hits:
+        _keep(cursor, h["start"])
+        first_ch, first_span = pairs[h["start"]]
+        size = h["size"] if h["size"] else first_span["size"]
+        new_x = first_ch["origin"][0] + delta
+        new_run = {"x": new_x, "y": first_ch["origin"][1], "text": h["new"],
+                   "size": size, "span": first_span}
+        runs.append(new_run)
+        # Where the text after this replacement used to start vs. now.
+        if h["end"] < len(pairs):
+            old_after = pairs[h["end"]][0]["origin"][0]
+        else:
+            old_after = pairs[h["end"] - 1][0]["bbox"][2]
+        new_width = sum(f.text_length(t, fontsize=size)
+                        for t, f in _font_runs(h["new"], first_span, font_files)[0])
+        delta = (new_x + new_width) - old_after
+        cursor = h["end"]
+    _keep(cursor, len(pairs))
+
+    # 3. Pick real fonts for every run and measure.
+    out_runs, missing = [], set()
+    for r in runs:
+        if not r["text"]:
+            continue
+        pieces, miss = _font_runs(r["text"], r["span"], font_files)
+        missing |= miss
+        x = r["x"]
+        for t, f in pieces:
+            w = f.text_length(t, fontsize=r["size"])
+            out_runs.append({"x": x, "y": r["y"], "text": t, "font": f, "size": r["size"],
+                             "color": _color_tuple(r["span"].get("color", 0)), "width": w,
+                             "cover": r.get("cover")})
+            x += w
+    if not out_runs:
+        return None
+
+    x0 = min(r["x"] for r in out_runs)
+    x_end = max(r["x"] + r["width"] for r in out_runs)
+    for r in out_runs:
+        r["dx"] = r["x"] - x0
+
+    boxes = [c["bbox"] for c in old_chars]
     # Height of the area to clear comes from the visible characters only --
     # a stray space from an earlier edit can have a much taller box that
     # would reach into the lines above and below.
-    vis = [c["bbox"] for c in all_chars if not c["c"].isspace()] or boxes
-    line_x0 = boxes[0][0]
-    if prefix:
-        want = first["rect"].x0 - line_x0
-        got = font_obj.text_length(prefix, fontsize=size)
-        if abs(got - want) > max(1.0, 0.03 * want):
-            # The label pulled in from the left didn't redraw at the same
-            # width -- try again with just this line's own text.
-            if lead_text:
-                return _plan_whole_line_rewrite(line, line_hits, font_files)
-            return None
-
+    vis = [c["bbox"] for c in old_chars if not c["c"].isspace()] or boxes
+    first_span = pairs[line_hits[0]["start"]][1]
     return {
-        "x": line_x0,
-        "y": span0["origin"][1],
-        "text": full_text,
-        "fontkey": fontkey,
-        "fontfile": fontfile,
-        "size": size,
-        "width": font_obj.text_length(full_text, fontsize=size),
+        "x": x0,
+        "y": pairs[line_hits[0]["start"]][0]["origin"][1],
+        "runs": out_runs,
+        "text": "".join(r["text"] for r in out_runs),
+        "width": x_end - x0,
+        "missing": missing,
         "old_rect": fitz.Rect(min(b[0] for b in boxes), min(b[1] for b in vis),
                               max(b[2] for b in boxes), max(b[3] for b in vis)),
-        "line_x1": span0["line_bbox"][2],
+        "line_x1": first_span["line_bbox"][2],
     }
 
 
@@ -951,6 +1210,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         spans = get_spans(page)
         lines = build_lines(spans)
         pos_blocks = build_pos_blocks(spans, page.rect.y1)
+        hidden_chars = None  # worked out only if a line on this page is edited
 
         redact_rects = []  # tight rects around the EXACT old text being
                             # removed/replaced -- these get TRUE redaction
@@ -1085,14 +1345,16 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
             # as two separate fields "Glass:" + "LHG026_4/4 (26) CN" (see
             # _plan_whole_line_rewrite). The old text of the WHOLE line is
             # truly redacted, so nothing is left hidden underneath either.
+            if hidden_chars is None:
+                hidden_chars = find_hidden_chars(page)
             plan = _plan_whole_line_rewrite(line, line_hits, font_files,
-                                            lines, set(hits_by_line.keys()))
+                                            lines, set(hits_by_line.keys()), hidden_chars)
             if plan is not None:
-                if plan["fontfile"] is None and not font_covers_text(plan["fontkey"], None, plan["text"]):
+                if plan["missing"]:
                     debug_notes.append(
-                        f"Page {page_num}: no available font covers every character "
-                        f"needed for '{plan['text']}' -- some characters may not "
-                        f"render correctly there."
+                        f"Page {page_num}: no available font covers "
+                        f"{' '.join(sorted(plan['missing']))} in '{plan['text']}' -- "
+                        f"those characters may not render correctly there."
                     )
                 old_rect = plan["old_rect"]
                 redact_rects.append(fitz.Rect(old_rect.x0 - pad, old_rect.y0 - pad,
@@ -1104,7 +1366,7 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 mask_idx = len(mask_rects) - 1
                 insert_jobs.append({
                     "x": plan["x"], "y": plan["y"], "text": plan["text"],
-                    "fontkey": plan["fontkey"], "fontfile": plan["fontfile"], "size": plan["size"],
+                    "runs": plan["runs"], "width": plan["width"],
                     "cover_idx": mask_idx,
                     "redact_idx": redact_idx,
                     "mask_indices": [mask_idx],
@@ -1312,6 +1574,32 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
                 job_by_redact_idx[ridx] = job
 
         def _draw_insert(page, job):
+            if job.get("runs"):
+                # Every run in its own font/size, written together (one text
+                # object per colour) so the line reads back as one field.
+                # A character the original PDF had painted over is painted
+                # over again straight after it, the same way the original
+                # did, so it stays in the text but not on the page.
+                writers = {}
+
+                def _flush():
+                    for color, tw in writers.items():
+                        tw.write_text(page, color=color)
+                    writers.clear()
+
+                for r in job["runs"]:
+                    tw = writers.get(r["color"])
+                    if tw is None:
+                        tw = writers[r["color"]] = fitz.TextWriter(page.rect)
+                    rx = job["x"] + r["dx"]
+                    tw.append((rx, r["y"]), r["text"], font=r["font"], fontsize=r["size"])
+                    if r.get("cover") is not None:
+                        _flush()
+                        rel, colour = r["cover"]
+                        page.draw_rect(fitz.Rect(rx + rel.x0, rel.y0, rx + rel.x1, rel.y1),
+                                       color=None, fill=colour, fill_opacity=1, overlay=True)
+                _flush()
+                return
             x, y, text, fontkey, fontfile, size = (
                 job["x"], job["y"], job["text"], job["fontkey"], job["fontfile"], job["size"]
             )
@@ -1372,7 +1660,12 @@ def process(input_pdf, xlsx_path, output_pdf, preview_dir=None):
         # just the edited spot": re-check the page we just edited for any
         # inserted text unexpectedly overlapping something else.
         if insert_jobs:
-            inserted_specs = [(job["x"], job["y"], job["text"]) for job in insert_jobs]
+            inserted_specs = []
+            for job in insert_jobs:
+                if job.get("runs"):
+                    inserted_specs += [(job["x"] + r["dx"], r["y"], r["text"]) for r in job["runs"]]
+                else:
+                    inserted_specs.append((job["x"], job["y"], job["text"]))
             page_warnings = find_overlap_warnings(page, inserted_specs, redact_rects + mask_rects)
             if page_warnings:
                 overlap_warnings[page_num] = page_warnings
